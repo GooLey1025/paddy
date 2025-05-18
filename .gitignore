@@ -1,0 +1,6 @@
+examples/test/
+examples/data/
+examples/log_out/
+examples/train_out/
+examples/1000_log_out/
+examples/10000_train_out/
