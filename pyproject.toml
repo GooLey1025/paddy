@@ -7,7 +7,7 @@ name = "paddy"
 version = "0.1.0"
 description = "Deep Learning models"
 authors = [
-    {name = "GooLey", email = "gooleywm@gmail.com"}
+    {name = "GooLey", email = "goley04@foxmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,12 +21,18 @@ dependencies = [
     "natsort",
     "tqdm",
     "google-cloud-storage",
+    "pysam",  
+    "matplotlib",  
+    "tensorboard",  
+    "scikit-learn",  
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "black",
+    "isort",
+    "flake8",
 ]
 
 [tool.setuptools]
@@ -38,4 +44,6 @@ where = ["src"]
 [project.scripts]
 paddy_train = "paddy.scripts.paddy_train:main"
 paddy_data = "paddy.scripts.paddy_data:main"
+paddy_eval = "paddy.scripts.paddy_eval:main"
+paddy_train_grid = "paddy.scripts.paddy_train_grid:main"
 extract_label = "paddy.helpers.extract_label:main" 
