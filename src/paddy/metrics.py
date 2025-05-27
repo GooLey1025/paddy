@@ -393,9 +393,7 @@ class PearsonR(tf.keras.metrics.Metric):
         else:
             reduce_axes = [0, 1]
 
-        #后加了一行, here
         product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=reduce_axes)
-
         self._product.assign_add(product)
 
         true_sum = tf.reduce_sum(y_true, axis=reduce_axes)
@@ -507,19 +505,13 @@ class R2(tf.keras.metrics.Metric):
         true_mean2 = tf.math.square(true_mean)
 
         total = self._true_sumsq - tf.multiply(self._count, true_mean2)
-        #后加了一行, here
-        total = tf.where(tf.greater(total, 1e-12), total,
-                         np.inf * tf.ones_like(total))
-
+        
         resid1 = self._pred_sumsq
         resid2 = -2 * self._product
         resid3 = self._true_sumsq
         resid = resid1 + resid2 + resid3
 
-        #r2 = tf.ones_like(self._shape, dtype=tf.float32) - tf.divide(
-        #    resid, total)
-        r2 = 1.0 - tf.divide(resid, total)
-
+        r2 = tf.ones_like(self._shape, dtype=tf.float32) - tf.divide(resid, total)
 
         if self._summarize:
             return tf.reduce_mean(r2)

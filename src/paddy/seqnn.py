@@ -36,6 +36,7 @@ class SeqNN:
         self.augment_shift = [0]
         self.strand_pair = []
         self.verbose = True
+        self.transpose_input = False
 
     def build_block(self, current, block_params):
         """Construct a SeqNN block.
@@ -118,8 +119,14 @@ class SeqNN:
 
         ###################################################
         # inputs - modified for gene expression data format
-        tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
-                                name="tracks")
+        if not self.transpose_input:
+            # Original shape: [batch, num_bins, num_tracks]
+            tracks = tf.keras.Input(shape=(self.num_bins, self.num_tracks),
+                                    name="tracks")
+        else:
+            # Transposed shape: [batch, num_tracks, num_bins]
+            tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
+                                    name="tracks")
         current = tracks
 
         self.preds_triu = False
@@ -178,7 +185,7 @@ class SeqNN:
             print(self.model.summary())
 
         # track pooling/striding and cropping, not checked yet
-        self.track_sequence(tracks)
+        # self.track_sequence(tracks)
 
     def build_embed(self, conv_layer_i: int, batch_norm: bool = True):
         """Build model to embed sequences into specific layer."""
@@ -201,6 +208,43 @@ class SeqNN:
             model_0.layers[-1].output)
         self.model = tf.keras.Model(inputs=model_0.layers[0].input,
                                     outputs=new_outputs)
+
+    def build_shifts_ensemble(self, ensemble_shifts=[0]):
+        """Build ensemble of models computing on shifted input sequences without reverse complement.
+        
+        Args:
+            ensemble_shifts: List of shifts to apply to the input.
+        """
+        shift_bool = len(ensemble_shifts) > 1 or ensemble_shifts[0] != 0
+        if shift_bool:
+            # input shape is different for tracks vs sequence
+            if not self.transpose_input:
+                # Original shape: [batch, num_bins, num_tracks]
+                tracks = tf.keras.Input(shape=(self.num_bins, self.num_tracks),
+                                        name="tracks")
+            else:
+                # Transposed shape: [batch, num_tracks, num_bins]
+                tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
+                                        name="tracks")
+
+            track_inputs = [tracks]
+
+            if shift_bool:
+                # generate shifted inputs
+                track_inputs = layers.EnsembleShift(ensemble_shifts)(
+                    track_inputs)
+
+            # predict each input
+            preds = [self.model(inp) for inp in track_inputs]
+
+            # create layer
+            preds_avg = tf.keras.layers.Average()(preds)
+
+            # create meta model
+            self.ensemble = tf.keras.Model(inputs=tracks, outputs=preds_avg)
+        else:
+            # no shifts, use original model
+            self.ensemble = self.model
 
     def build_ensemble(self, ensemble_rc: bool = False, ensemble_shifts=[0]):
         """Build ensemble of models computing on augmented input sequences."""
@@ -872,13 +916,26 @@ class SeqNN:
             model = self.model
 
         # tracks input
-        tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
-                                name="tracks")
+        if not self.transpose_input:
+            # Original shape: [batch, num_bins, num_tracks]
+            tracks = tf.keras.Input(shape=(self.num_bins, self.num_tracks),
+                                    name="tracks")
+        else:
+            # Transposed shape: [batch, num_tracks, num_bins]
+            tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
+                                    name="tracks")
 
         # predict and step across positions (for gene data, usually on the bins dimension)
         preds = model(tracks)
-        step_positions = np.arange(preds.shape[1], step=step)
-        preds_step = tf.gather(preds, step_positions, axis=-2)
+
+        # For transposed input, the positions to step over are in the last dimension
+        if not self.transpose_input:
+            step_positions = np.arange(preds.shape[1], step=step)
+            preds_step = tf.gather(preds, step_positions, axis=-2)
+        else:
+            step_positions = np.arange(preds.shape[2], step=step)
+            preds_step = tf.gather(preds, step_positions, axis=-1)
+
         model_step = tf.keras.Model(inputs=tracks, outputs=preds_step)
 
         # replace model

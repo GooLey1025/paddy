@@ -54,6 +54,26 @@ def main():
         default="log_out",
         help="Tensorboard log directory [Default: %(default)s]",
     )
+    parser.add_argument(
+        "--transpose_input",
+        default=False,
+        action="store_true",
+        help=
+        "Transpose input features from [num_bins, num_tracks] to [num_tracks, num_bins] [Default: %(default)s]",
+    )
+    parser.add_argument(
+        "--restore",
+        action="store_true",
+        default=False,
+        help="Restore model from checkpoint in out_dir [Default: %(default)s]",
+    )
+    parser.add_argument(
+        "--restore_step",
+        type=int,
+        default=None,
+        help=
+        "Specific checkpoint step to restore (will use latest if not specified) [Default: %(default)s]",
+    )
     parser.add_argument("data_dirs",
                         nargs="+",
                         help="Train/valid/test data directorie(s)")
@@ -74,15 +94,15 @@ def main():
 
     for data_dir in args.data_dirs:
         train_data.append(
-            dataset.TracksDataset(
-                data_dir,
-                split_label="train",
-                batch_size=params_train["batch_size"],
-                shuffle_buffer=params_train.get("shuffle_buffer", 128),
-                mode="train",
-                tfr_pattern=args.tfr_train,
-                repeat=True
-            ))
+            dataset.TracksDataset(data_dir,
+                                  split_label="train",
+                                  batch_size=params_train["batch_size"],
+                                  shuffle_buffer=params_train.get(
+                                      "shuffle_buffer", 128),
+                                  mode="train",
+                                  tfr_pattern=args.tfr_train,
+                                  repeat=True,
+                                  transpose_input=args.transpose_input))
 
         eval_data.append(
             dataset.TracksDataset(
@@ -91,6 +111,7 @@ def main():
                 batch_size=params_train["batch_size"],
                 mode="eval",
                 tfr_pattern=args.tfr_eval,
+                transpose_input=args.transpose_input,
             ))
 
     if args.mixed_precision:
@@ -101,11 +122,44 @@ def main():
         # one GPU
 
         # initialize model
+        params_model["transpose_input"] = args.transpose_input
         seqnn_model = seqnn.SeqNN(params_model)
 
-        seqnn_trainer = trainer.Trainer(params_train, train_data, eval_data,
-                                        args.out_dir, args.log_dir)
+        seqnn_trainer = trainer.Trainer(
+            params_train,
+            train_data,
+            eval_data,
+            args.out_dir,
+            args.log_dir,
+        )
         seqnn_trainer.compile(seqnn_model)
+
+        checkpoint_dir = args.out_dir
+
+        if args.restore and os.path.exists(checkpoint_dir):
+            if args.restore_step is not None:
+                checkpoint_path = os.path.join(checkpoint_dir,
+                                               f"ckpt-{args.restore_step}")
+                if os.path.exists(checkpoint_path + ".index"):
+                    print(
+                        f"Restoring model from checkpoint step {args.restore_step}..."
+                    )
+                    seqnn_trainer.restore(checkpoint_path, seqnn_model)
+                else:
+                    print(
+                        f"Specified checkpoint {checkpoint_path} not found, starting from scratch."
+                    )
+            else:
+                latest_checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
+                if latest_checkpoint is not None:
+                    print(
+                        f"Restoring model from latest checkpoint {latest_checkpoint}..."
+                    )
+                    seqnn_trainer.restore(latest_checkpoint, seqnn_model)
+                else:
+                    print(
+                        f"No checkpoints found in {checkpoint_dir}, starting from scratch."
+                    )
 
     else:
         ########################################
@@ -114,15 +168,13 @@ def main():
         exit()
 
     # train model
-    if args.keras_fit:
-        seqnn_trainer.fit_keras(seqnn_model)
+
+    if len(args.data_dirs) == 1:
+        seqnn_trainer.fit_tape(seqnn_model)
     else:
-        if len(args.data_dirs) == 1:
-            seqnn_trainer.fit_tape(seqnn_model)
-        else:
-            # seqnn_trainer.fit2(seqnn_model)
-            print("fit2 not implemented yet.")
-            exit()
+        print("fit2 not implemented yet.")
+        exit()
+        seqnn_trainer.fit2(seqnn_model)
 
 
 if __name__ == "__main__":

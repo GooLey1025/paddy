@@ -1,7 +1,5 @@
 import tensorflow as tf
 
-
-
 import sys
 from typing import Optional, List
 
@@ -32,10 +30,8 @@ class Scale(tf.keras.layers.Layer):
         elif isinstance(axis, int):
             self.axis = axis
         else:
-            raise TypeError(
-                "Expected an int or a list/tuple of ints for the "
-                "argument 'axis', but received: %r" % axis
-            )
+            raise TypeError("Expected an int or a list/tuple of ints for the "
+                            "argument 'axis', but received: %r" % axis)
         self.initializer = tf.keras.initializers.get(initializer)
 
     def build(self, input_shape):
@@ -74,12 +70,12 @@ class Scale(tf.keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config().copy()
-        config.update(
-            {
-                "axis": self.axis,
-                "initializer": tf.keras.initializers.serialize(self.initializer),
-            }
-        )
+        config.update({
+            "axis":
+            self.axis,
+            "initializer":
+            tf.keras.initializers.serialize(self.initializer),
+        })
         return config
 
 
@@ -185,24 +181,25 @@ def _prepend_dims(x, num_dims):
     return tf.reshape(x, shape=[1] * num_dims + x.shape)
 
 
-def positional_features_central_mask(
-    positions: tf.Tensor, feature_size: int, seq_length: int
-):
+def positional_features_central_mask(positions: tf.Tensor, feature_size: int,
+                                     seq_length: int):
     """Positional features using a central mask (allow only central features)."""
     pow_rate = np.exp(np.log(seq_length + 1) / feature_size).astype("float32")
-    center_widths = tf.pow(pow_rate, tf.range(1, feature_size + 1, dtype=tf.float32))
+    center_widths = tf.pow(pow_rate,
+                           tf.range(1, feature_size + 1, dtype=tf.float32))
     center_widths = center_widths - 1
     center_widths = _prepend_dims(center_widths, positions.shape.rank)
-    outputs = tf.cast(center_widths > tf.abs(positions)[..., tf.newaxis], tf.float32)
-    tf.TensorShape(outputs.shape).assert_is_compatible_with(
-        positions.shape + [feature_size]
-    )
+    outputs = tf.cast(center_widths > tf.abs(positions)[..., tf.newaxis],
+                      tf.float32)
+    tf.TensorShape(outputs.shape).assert_is_compatible_with(positions.shape +
+                                                            [feature_size])
     return outputs
 
 
-def positional_features(
-    positions: tf.Tensor, feature_size: int, seq_length: int, symmetric=False
-):
+def positional_features(positions: tf.Tensor,
+                        feature_size: int,
+                        seq_length: int,
+                        symmetric=False):
     """Compute relative positional encodings/features.
 
     Each positional feature function will compute/provide the same fraction of
@@ -229,18 +226,19 @@ def positional_features(
         num_components = 2
     num_basis_per_class = feature_size // num_components
 
-    embeddings = positional_features_central_mask(
-        positions, num_basis_per_class, seq_length
-    )
+    embeddings = positional_features_central_mask(positions,
+                                                  num_basis_per_class,
+                                                  seq_length)
 
     if not symmetric:
         embeddings = tf.concat(
-            [embeddings, tf.sign(positions)[..., tf.newaxis] * embeddings], axis=-1
-        )
+            [embeddings,
+             tf.sign(positions)[..., tf.newaxis] * embeddings],
+            axis=-1)
 
-    tf.TensorShape(embeddings.shape).assert_is_compatible_with(
-        positions.shape + [feature_size]
-    )
+    tf.TensorShape(
+        embeddings.shape).assert_is_compatible_with(positions.shape +
+                                                    [feature_size])
 
     return embeddings
 
@@ -317,9 +315,8 @@ class MultiheadAttention(tf.keras.layers.Layer):
             # num_position_features needs to be divisible by the number of
             # relative positional functions *2 (for symmetric & asymmetric version).
             divisible_by = 2 * len(self._relative_position_functions)
-            self._num_position_features = (
-                self._value_size // divisible_by
-            ) * divisible_by
+            self._num_position_features = (self._value_size //
+                                           divisible_by) * divisible_by
         else:
             self._num_position_features = num_position_features
         self._positional_dropout_rate = positional_dropout_rate
@@ -398,7 +395,8 @@ class MultiheadAttention(tf.keras.layers.Layer):
                 kernel_regularizer=tf.keras.regularizers.l2(self._l2_scale),
                 kernel_initializer=self._initializer,
             )
-        w_init = tf.keras.initializers.Zeros() if zero_initialize else self._initializer
+        w_init = tf.keras.initializers.Zeros(
+        ) if zero_initialize else self._initializer
         if transpose_stride > 0:
             self._embedding_layer = tf.keras.layers.Conv1DTranspose(
                 filters=embedding_size,
@@ -447,8 +445,7 @@ class MultiheadAttention(tf.keras.layers.Layer):
         # Split H * Channels into separate axes.
         num_kv_channels = num_channels // self._num_heads
         output = tf.reshape(
-            output, shape=[-1, seq_len, self._num_heads, num_kv_channels]
-        )
+            output, shape=[-1, seq_len, self._num_heads, num_kv_channels])
         # [B, T, H, KV] -> [B, H, T, KV]
         return tf.transpose(output, [0, 2, 1, 3])
 
@@ -468,15 +465,17 @@ class MultiheadAttention(tf.keras.layers.Layer):
 
         # [B, H, T', T]
         # content_logits = tf.matmul(q + self._r_w_bias, k, transpose_b=True)
-        content_logits = tf.matmul(
-            q + tf.cast(self._r_w_bias, dtype=inputs.dtype), k, transpose_b=True
-        )
+        content_logits = tf.matmul(q +
+                                   tf.cast(self._r_w_bias, dtype=inputs.dtype),
+                                   k,
+                                   transpose_b=True)
 
         if self._num_position_features == 0:
             logits = content_logits
         else:
             # Project positions to form relative keys.
-            distances = tf.range(-seq_len + 1, seq_len, dtype=tf.float32)[tf.newaxis]
+            distances = tf.range(-seq_len + 1, seq_len,
+                                 dtype=tf.float32)[tf.newaxis]
 
             if self.seqlen_train is None:
                 positional_encodings = positional_features(
@@ -497,8 +496,7 @@ class MultiheadAttention(tf.keras.layers.Layer):
 
             if training:
                 positional_encodings = tf.nn.dropout(
-                    positional_encodings, rate=self._positional_dropout_rate
-                )
+                    positional_encodings, rate=self._positional_dropout_rate)
 
             # [1, H, 2T-1, K]
             r_k = self._multihead_output(self._r_k_layer, positional_encodings)
@@ -515,9 +513,10 @@ class MultiheadAttention(tf.keras.layers.Layer):
             else:
                 # [1, H, 1, 2T-1]
                 # relative_logits = tf.matmul(self._r_r_bias, r_k, transpose_b=True)
-                relative_logits = tf.matmul(
-                    tf.cast(self._r_r_bias, dtype=inputs.dtype), r_k, transpose_b=True
-                )
+                relative_logits = tf.matmul(tf.cast(self._r_r_bias,
+                                                    dtype=inputs.dtype),
+                                            r_k,
+                                            transpose_b=True)
                 # [1, H, T', 2T-1]
                 relative_logits = tf.broadcast_to(
                     relative_logits,
@@ -538,9 +537,8 @@ class MultiheadAttention(tf.keras.layers.Layer):
         # Transpose and reshape the output.
         output = tf.matmul(weights, v)  # [B, H, T', V]
         output_transpose = tf.transpose(output, [0, 2, 1, 3])  # [B, T', H, V]
-        attended_inputs = tf.reshape(
-            output_transpose, shape=[-1, seq_len, embedding_size]
-        )
+        attended_inputs = tf.reshape(output_transpose,
+                                     shape=[-1, seq_len, embedding_size])
 
         # Gate
         if self._gated:
@@ -553,28 +551,33 @@ class MultiheadAttention(tf.keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config().copy()
-        config.update({"value_size": self._value_size, "key_size": self._key_size})
+        config.update({
+            "value_size": self._value_size,
+            "key_size": self._key_size
+        })
         return config
 
 
 class WheezeExcite(tf.keras.layers.Layer):
+
     def __init__(self, pool_size):
         super(WheezeExcite, self).__init__()
         self.pool_size = pool_size
         assert self.pool_size % 2 == 1
-        self.paddings = [[0, 0], [self.pool_size // 2, self.pool_size // 2], [0, 0]]
+        self.paddings = [[0, 0], [self.pool_size // 2, self.pool_size // 2],
+                         [0, 0]]
 
     def build(self, input_shape):
         self.num_channels = input_shape[-1]
 
-        self.wheeze = tf.keras.layers.AveragePooling1D(
-            self.pool_size, strides=1, padding="valid"
-        )
+        self.wheeze = tf.keras.layers.AveragePooling1D(self.pool_size,
+                                                       strides=1,
+                                                       padding="valid")
 
-        self.excite1 = tf.keras.layers.Dense(
-            units=self.num_channels // 4, activation="relu"
-        )
-        self.excite2 = tf.keras.layers.Dense(units=self.num_channels, activation="relu")
+        self.excite1 = tf.keras.layers.Dense(units=self.num_channels // 4,
+                                             activation="relu")
+        self.excite2 = tf.keras.layers.Dense(units=self.num_channels,
+                                             activation="relu")
 
     def call(self, x):
         # pad
@@ -600,6 +603,7 @@ class WheezeExcite(tf.keras.layers.Layer):
 
 
 class SqueezeExcite(tf.keras.layers.Layer):
+
     def __init__(
         self,
         activation="relu",
@@ -694,20 +698,19 @@ class SqueezeExcite(tf.keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config().copy()
-        config.update(
-            {
-                "activation": self.activation,
-                "additive": self.additive,
-                "use_bias": self.use_bias,
-                "norm_type": self.norm_type,
-                "bn_momentum": self.bn_momentum,
-                "rank": self.rank,
-            }
-        )
+        config.update({
+            "activation": self.activation,
+            "additive": self.additive,
+            "use_bias": self.use_bias,
+            "norm_type": self.norm_type,
+            "bn_momentum": self.bn_momentum,
+            "rank": self.rank,
+        })
         return config
 
 
 class GlobalContext(tf.keras.layers.Layer):
+
     def __init__(self):
         super(GlobalContext, self).__init__()
 
@@ -723,19 +726,18 @@ class GlobalContext(tf.keras.layers.Layer):
     def call(self, x):
         # context attention
         keys = self.context_key(x)  # [batch x length x 1]
-        attention = tf.keras.activations.softmax(keys, axis=-2)  # [batch x length x 1]
+        attention = tf.keras.activations.softmax(
+            keys, axis=-2)  # [batch x length x 1]
 
         # context summary
         context = x * attention  # [batch x length x channels]
-        context = tf.keras.backend.sum(
-            context, axis=-2, keepdims=True
-        )  # [batch x 1 x channels]
+        context = tf.keras.backend.sum(context, axis=-2,
+                                       keepdims=True)  # [batch x 1 x channels]
 
         # transform
         transform = self.dense1(context)  # [batch x 1 x channels/4]
         transform = tf.keras.activations.relu(
-            self.ln(transform)
-        )  # [batch x 1 x channels/4]
+            self.ln(transform))  # [batch x 1 x channels/4]
         transform = self.dense2(transform)  # [batch x 1 x channels]
         # transform = tf.reshape(transform, [-1,1,self.num_channels])
 
@@ -751,9 +753,10 @@ class GlobalContext(tf.keras.layers.Layer):
 class SoftmaxPool1D(tf.keras.layers.Layer):
     """Pooling operation with optional weights."""
 
-    def __init__(
-        self, pool_size: int = 2, per_channel: bool = False, init_gain: float = 2.0
-    ):
+    def __init__(self,
+                 pool_size: int = 2,
+                 per_channel: bool = False,
+                 init_gain: float = 2.0):
         """Softmax pooling.
 
         Args:
@@ -781,15 +784,18 @@ class SoftmaxPool1D(tf.keras.layers.Layer):
     def call(self, inputs):
         _, seq_length, num_channels = inputs.shape
         inputs = tf.reshape(
-            inputs, (-1, seq_length // self.pool_size, self.pool_size, num_channels)
-        )
-        return tf.reduce_sum(
-            inputs * tf.nn.softmax(self.logit_linear(inputs), axis=-2), axis=-2
-        )
+            inputs,
+            (-1, seq_length // self.pool_size, self.pool_size, num_channels))
+        return tf.reduce_sum(inputs *
+                             tf.nn.softmax(self.logit_linear(inputs), axis=-2),
+                             axis=-2)
 
     def get_config(self):
         config = super().get_config().copy()
-        config.update({"pool_size": self.pool_size, "init_gain": self.init_gain})
+        config.update({
+            "pool_size": self.pool_size,
+            "init_gain": self.init_gain
+        })
         return config
 
 
@@ -978,7 +984,8 @@ class StochasticReverseComplement(tf.keras.layers.Layer):
             rc_seq_1hot = tf.gather(seq_1hot, [3, 2, 1, 0], axis=-1)
             rc_seq_1hot = tf.reverse(rc_seq_1hot, axis=[1])
             reverse_bool = tf.random.uniform(shape=[]) > 0.5
-            src_seq_1hot = tf.cond(reverse_bool, lambda: rc_seq_1hot, lambda: seq_1hot)
+            src_seq_1hot = tf.cond(reverse_bool, lambda: rc_seq_1hot,
+                                   lambda: seq_1hot)
             return src_seq_1hot, reverse_bool
         else:
             return seq_1hot, tf.constant(False)
@@ -1006,10 +1013,12 @@ class SwitchReverse(tf.keras.layers.Layer):
             # 2d spatial axes
             rev_axes = [1, 2]
         else:
-            raise ValueError("Cannot recognize SwitchReverse input dimensions %d." % xd)
+            raise ValueError(
+                "Cannot recognize SwitchReverse input dimensions %d." % xd)
 
         if len(rev_axes) > 0:
-            xr = tf.keras.backend.switch(reverse, tf.reverse(x, axis=rev_axes), x)
+            xr = tf.keras.backend.switch(reverse, tf.reverse(x, axis=rev_axes),
+                                         x)
         else:
             xr = x
 
@@ -1017,8 +1026,7 @@ class SwitchReverse(tf.keras.layers.Layer):
             xrs = xr
         else:
             xrs = tf.keras.backend.switch(
-                reverse, tf.gather(xr, self.strand_pair, axis=-1), xr
-            )
+                reverse, tf.gather(xr, self.strand_pair, axis=-1), xr)
 
         return xrs
 
@@ -1029,6 +1037,7 @@ class SwitchReverse(tf.keras.layers.Layer):
 
 
 class SwitchReverseTriu(tf.keras.layers.Layer):
+
     def __init__(self, diagonal_offset):
         super(SwitchReverseTriu, self).__init__()
         self.diagonal_offset = diagonal_offset
@@ -1066,9 +1075,9 @@ class SwitchReverseTriu(tf.keras.layers.Layer):
         # extract ut order
         rc_ut_order = mat_rc_indexes[ut_indexes]
 
-        return tf.keras.backend.switch(
-            reverse, tf.gather(x_ut, rc_ut_order, axis=1), x_ut
-        )
+        return tf.keras.backend.switch(reverse,
+                                       tf.gather(x_ut, rc_ut_order, axis=1),
+                                       x_ut)
 
     def get_config(self):
         config = super().get_config().copy()
@@ -1116,9 +1125,10 @@ class StochasticShift(tf.keras.layers.Layer):
 
     def call(self, seq_1hot, training=None):
         if training:
-            shift_i = tf.random.uniform(
-                shape=[], minval=0, dtype=tf.int64, maxval=len(self.augment_shifts)
-            )
+            shift_i = tf.random.uniform(shape=[],
+                                        minval=0,
+                                        dtype=tf.int64,
+                                        maxval=len(self.augment_shifts))
             shift = tf.gather(self.augment_shifts, shift_i)
             sseq_1hot = tf.cond(
                 tf.not_equal(shift, 0),
@@ -1131,9 +1141,11 @@ class StochasticShift(tf.keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config().copy()
-        config.update(
-            {"shift_max": self.shift_max, "symmetric": self.symmetric, "pad": self.pad}
-        )
+        config.update({
+            "shift_max": self.shift_max,
+            "symmetric": self.symmetric,
+            "pad": self.pad
+        })
         return config
 
 
@@ -1149,7 +1161,7 @@ def shift_sequence(seq, shift, pad_value=0):
         raise ValueError("input sequence should be rank 3")
     input_shape = seq.shape
 
-    pad = pad_value * tf.ones_like(seq[:, 0 : tf.abs(shift), :])
+    pad = pad_value * tf.ones_like(seq[:, 0:tf.abs(shift), :])
 
     def _shift_right(_seq):
         # shift is positive
@@ -1161,9 +1173,8 @@ def shift_sequence(seq, shift, pad_value=0):
         sliced_seq = _seq[:, -shift:, :]
         return tf.concat([sliced_seq, pad], axis=1)
 
-    sseq = tf.cond(
-        tf.greater(shift, 0), lambda: _shift_right(seq), lambda: _shift_left(seq)
-    )
+    sseq = tf.cond(tf.greater(shift, 0), lambda: _shift_right(seq),
+                   lambda: _shift_left(seq))
     sseq.set_shape(input_shape)
 
     return sseq
@@ -1180,7 +1191,8 @@ class FactorInverse(tf.keras.layers.Layer):
     def __init__(self, components_npy):
         super(FactorInverse, self).__init__()
         self.components_npy = components_npy
-        self.components = tf.constant(np.load(components_npy), dtype=tf.float32)
+        self.components = tf.constant(np.load(components_npy),
+                                      dtype=tf.float32)
 
     def call(self, W):
         return tf.keras.backend.dot(W, self.components)
@@ -1220,3 +1232,274 @@ def activate(current, activation, verbose=False):
         exit(1)
 
     return current
+
+
+############################################################
+# Position Embeddings
+############################################################
+
+
+class PositionalEmbedding(tf.keras.layers.Layer):
+    """Positional embedding layer that adds position information to sequence inputs."""
+
+    def __init__(self,
+                 hidden_dim=256,
+                 dropout_rate=0.1,
+                 embedding_type="learnable",
+                 max_sequence_length=None,
+                 scaling_factor=1.0,
+                 normalize_embeddings=False,
+                 use_bias=True,
+                 kernel_initializer="he_normal",
+                 kernel_regularizer=None,
+                 embedding_initializer="uniform",
+                 l2_scale=0,
+                 add_positions=False,
+                 name=None,
+                 **kwargs):
+        """Creates a PositionalEmbedding module to add position information to inputs.
+
+        Args:
+          hidden_dim: The dimensionality of the output embeddings.
+          dropout_rate: Dropout probability for the position embeddings.
+          embedding_type: Type of position embedding to use ('learnable', 'sinusoidal', or 'relative').
+          max_sequence_length: Maximum expected sequence length. Required for 'sinusoidal' type.
+            If None for 'learnable' type, will be inferred from input at build time.
+          scaling_factor: Scaling factor for the embeddings before adding to inputs.
+          normalize_embeddings: Whether to apply layer normalization to the embeddings.
+          use_bias: Whether to use bias in the projection layer.
+          kernel_initializer: Initializer for the projection layer weights.
+          kernel_regularizer: Regularizer for the projection layer weights.
+          embedding_initializer: Initializer for the positional embedding weights.
+          l2_scale: L2 regularization scale for weights. Only used if kernel_regularizer is None.
+          add_positions: If True, adds positional embeddings to input. If False, only returns embeddings.
+        """
+        super().__init__(name=name, **kwargs)
+        self._hidden_dim = hidden_dim
+        self._dropout_rate = dropout_rate
+        self._embedding_type = embedding_type
+        self._max_sequence_length = max_sequence_length
+        self._scaling_factor = scaling_factor
+        self._normalize_embeddings = normalize_embeddings
+        self._use_bias = use_bias
+        self._kernel_initializer = kernel_initializer
+        self._embedding_initializer = embedding_initializer
+        self._add_positions = add_positions
+
+        # Set up regularizer
+        if kernel_regularizer is None and l2_scale > 0:
+            self._kernel_regularizer = tf.keras.regularizers.l2(l2_scale)
+        else:
+            self._kernel_regularizer = kernel_regularizer
+
+        # Validate parameters
+        if embedding_type not in ["learnable", "sinusoidal", "relative"]:
+            raise ValueError(
+                f"Unsupported embedding_type: {embedding_type}. "
+                f"Must be one of: 'learnable', 'sinusoidal', or 'relative'.")
+
+        if embedding_type == "sinusoidal" and max_sequence_length is None:
+            raise ValueError(
+                "max_sequence_length must be specified for sinusoidal embeddings."
+            )
+
+    def build(self, input_shape):
+        """Build the layer based on input shape.
+        
+        Args:
+            input_shape: Shape of the input tensor [batch, seq_length, features]
+        """
+        # Create projection layer to transform input features to hidden dimension
+        self._projection_layer = tf.keras.layers.Dense(
+            units=self._hidden_dim,
+            use_bias=self._use_bias,
+            kernel_initializer=self._kernel_initializer,
+            kernel_regularizer=self._kernel_regularizer,
+            name="feature_projection")
+
+        # Create positional embeddings based on type
+        seq_length = input_shape[1]  # Get sequence length
+
+        if self._embedding_type == "learnable":
+            max_len = self._max_sequence_length or seq_length
+            self._embedding_layer = tf.keras.layers.Embedding(
+                input_dim=max_len,
+                output_dim=self._hidden_dim,
+                embeddings_initializer=self._embedding_initializer,
+                name="position_embedding")
+        elif self._embedding_type == "sinusoidal":
+            # For sinusoidal, we pre-compute the embeddings
+            self._sinusoidal_embeddings = self._create_sinusoidal_embeddings(
+                max_len=self._max_sequence_length, hidden_dim=self._hidden_dim)
+        elif self._embedding_type == "relative":
+            # For relative positional encoding
+            self._rel_embedding_layer = tf.keras.layers.Dense(
+                units=self._hidden_dim,
+                use_bias=False,
+                kernel_initializer=self._kernel_initializer,
+                kernel_regularizer=self._kernel_regularizer,
+                name="relative_position_embedding")
+
+        # Layer normalization if needed
+        if self._normalize_embeddings:
+            self._layer_norm = tf.keras.layers.LayerNormalization(
+                epsilon=1e-5, name="embedding_layer_norm")
+
+        # Dropout layer
+        self._dropout = tf.keras.layers.Dropout(rate=self._dropout_rate)
+
+        super(PositionalEmbedding, self).build(input_shape)
+
+    def _create_sinusoidal_embeddings(self, max_len, hidden_dim):
+        """Creates sinusoidal position embeddings.
+        
+        Args:
+            max_len: Maximum sequence length
+            hidden_dim: Embedding dimension
+            
+        Returns:
+            Tensor of shape [1, max_len, hidden_dim] with position embeddings
+        """
+        # Implementation based on "Attention Is All You Need" paper
+        position = tf.range(max_len, dtype=tf.float32)[:, tf.newaxis]
+        dim_pos = tf.range(0, hidden_dim, 2, dtype=tf.float32)
+
+        # Calculate the wavelengths
+        wavelengths = tf.pow(10000.0, (2 * dim_pos / hidden_dim))
+        angle_rates = 1 / wavelengths
+
+        # Calculate angles
+        angle_rads = position * angle_rates[tf.newaxis, :]
+
+        # Apply sine to even indices and cosine to odd indices
+        sin_embeddings = tf.sin(angle_rads)
+        cos_embeddings = tf.cos(angle_rads)
+
+        # Interleave sin and cos values
+        sinusoid_table = tf.concat([sin_embeddings, cos_embeddings], axis=-1)
+
+        # Handle odd hidden dimensions
+        if hidden_dim % 2 == 1:
+            sinusoid_table = tf.pad(sinusoid_table, [[0, 0], [0, 1]])
+
+        return tf.expand_dims(sinusoid_table, axis=0)  # Add batch dimension
+
+    def call(self, inputs, training=False, mask=None, positions=None):
+        """Apply positional embeddings to input sequence.
+        
+        Args:
+            inputs: Input tensor of shape [batch_size, seq_length, features]
+            training: Boolean indicating whether in training mode
+            mask: Optional mask tensor
+            positions: Optional explicit positions to use instead of sequential
+            
+        Returns:
+            Tensor with positional information added, shape [batch_size, seq_length, hidden_dim]
+        """
+        input_shape = tf.shape(inputs)
+        batch_size = input_shape[0]
+        seq_length = input_shape[1]
+
+        # Project input features to hidden dimension
+        projected_inputs = self._projection_layer(inputs)
+
+        # Generate positional embeddings based on type
+        if self._embedding_type == "learnable":
+            if positions is None:
+                positions = tf.range(seq_length)
+            position_embeddings = self._embedding_layer(positions)
+            # Broadcast to match batch size if needed
+            position_embeddings = tf.broadcast_to(
+                position_embeddings,
+                shape=[batch_size, seq_length, self._hidden_dim])
+
+        elif self._embedding_type == "sinusoidal":
+            # Use pre-computed embeddings, sliced to current sequence length
+            position_embeddings = self._sinusoidal_embeddings[:, :
+                                                              seq_length, :]
+            # Broadcast to match batch size
+            position_embeddings = tf.broadcast_to(
+                position_embeddings,
+                shape=[batch_size, seq_length, self._hidden_dim])
+
+        elif self._embedding_type == "relative":
+            # Generate relative position encodings
+            distances = tf.range(-seq_length + 1, seq_length,
+                                 dtype=tf.float32)[tf.newaxis]
+            # Get positional features
+            position_features = self._create_positional_features(
+                distances, seq_length)
+            position_embeddings = self._rel_embedding_layer(position_features)
+            # Reshape to match input dimensions
+            position_embeddings = tf.reshape(
+                position_embeddings,
+                [batch_size, seq_length, self._hidden_dim])
+
+        # Scale embeddings if needed
+        if self._scaling_factor != 1.0:
+            position_embeddings = position_embeddings * self._scaling_factor
+
+        # Apply dropout during training
+        if training:
+            position_embeddings = self._dropout(position_embeddings)
+
+        # Add positional embeddings to input or return them separately
+        if self._add_positions:
+            outputs = projected_inputs + position_embeddings
+        else:
+            outputs = position_embeddings
+
+        # Apply layer normalization if specified
+        if self._normalize_embeddings:
+            outputs = self._layer_norm(outputs)
+
+        return outputs
+
+    def _create_positional_features(self, positions, seq_length):
+        """Create positional features for relative position encoding.
+        
+        Args:
+            positions: Tensor with relative positions
+            seq_length: Length of the sequence
+            
+        Returns:
+            Tensor with positional features
+        """
+        # Simple implementation - can be extended with more sophisticated features
+        feature_size = self._hidden_dim
+        # Scale positions to be between -1 and 1
+        positions = positions / seq_length
+
+        # Create features
+        features = tf.concat([
+            positions,
+            tf.square(positions),
+            tf.sin(positions * 3.14159),
+            tf.cos(positions * 3.14159)
+        ],
+                             axis=-1)
+
+        # Project to desired dimension
+        features = tf.keras.layers.Dense(
+            feature_size,
+            activation=None,
+            kernel_initializer=self._kernel_initializer)(features)
+
+        return features
+
+    def get_config(self):
+        """Return the configuration of the layer for serialization."""
+        config = super().get_config().copy()
+        config.update({
+            "hidden_dim": self._hidden_dim,
+            "dropout_rate": self._dropout_rate,
+            "embedding_type": self._embedding_type,
+            "max_sequence_length": self._max_sequence_length,
+            "scaling_factor": self._scaling_factor,
+            "normalize_embeddings": self._normalize_embeddings,
+            "use_bias": self._use_bias,
+            "kernel_initializer": self._kernel_initializer,
+            "embedding_initializer": self._embedding_initializer,
+            "add_positions": self._add_positions,
+        })
+        return config

@@ -1,4 +1,3 @@
-
 import time
 import pdb
 
@@ -34,12 +33,10 @@ def parse_loss(
     if strategy is not None and not keras_fit:
         if loss_label == "mse":
             loss_fn = tf.keras.losses.MeanSquaredError(
-                reduction=tf.keras.losses.Reduction.NONE
-            )
+                reduction=tf.keras.losses.Reduction.NONE)
         elif loss_label == "bce":
             loss_fn = tf.keras.losses.BinaryCrossentropy(
-                reduction=tf.keras.losses.Reduction.NONE
-            )
+                reduction=tf.keras.losses.Reduction.NONE)
         elif loss_label == "poisson_mn":
             loss_fn = metrics.PoissonMultinomial(
                 total_weight=total_weight,
@@ -49,14 +46,13 @@ def parse_loss(
             )
         elif loss_label == "poisson_kl":
             loss_fn = metrics.PoissonKL(
-                spec_weight, reduction=tf.keras.losses.Reduction.NONE
-            )
+                spec_weight, reduction=tf.keras.losses.Reduction.NONE)
         elif loss_label == "mse_udot":
             loss_fn = metrics.MeanSquaredErrorUDot(
-                spec_weight, reduction=tf.keras.losses.Reduction.NONE
-            )
+                spec_weight, reduction=tf.keras.losses.Reduction.NONE)
         else:
-            loss_fn = tf.keras.losses.Poisson(reduction=tf.keras.losses.Reduction.NONE)
+            loss_fn = tf.keras.losses.Poisson(
+                reduction=tf.keras.losses.Reduction.NONE)
     else:
         if loss_label == "mse":
             loss_fn = tf.keras.losses.MeanSquaredError()
@@ -131,8 +127,12 @@ class Trainer:
         self.patience = self.params.get("patience", 20)
 
         # compute batches/epoch
-        self.train_epoch_batches = [td.batches_per_epoch() for td in self.train_data]
-        self.eval_epoch_batches = [ed.batches_per_epoch() for ed in self.eval_data]
+        self.train_epoch_batches = [
+            td.batches_per_epoch() for td in self.train_data
+        ]
+        self.eval_epoch_batches = [
+            ed.batches_per_epoch() for ed in self.eval_data
+        ]
         self.train_epochs_min = self.params.get("train_epochs_min", 1)
         self.train_epochs_max = self.params.get("train_epochs_max", 10000)
 
@@ -171,12 +171,67 @@ class Trainer:
                 ]
             else:
                 num_targets = model.output_shape[-1]
-                model_metrics = [metrics.PearsonR(num_targets), metrics.R2(num_targets)]
+                model_metrics = [
+                    metrics.PearsonR(num_targets),
+                    metrics.R2(num_targets)
+                ]
 
-            model.compile(
-                loss=self.loss_fn, optimizer=self.optimizer, metrics=model_metrics
-            )
+            model.compile(loss=self.loss_fn,
+                          optimizer=self.optimizer,
+                          metrics=model_metrics)
         self.compiled = True
+
+    def restore(self, checkpoint_path, seqnn_model=None):
+        """Restore model and optimizer state from a checkpoint.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file or directory
+            seqnn_model: Optional SeqNN model to restore weights to. If None,
+                         only optimizer state will be restored.
+        """
+        # If checkpoint_path is a directory, find the latest checkpoint
+        if tf.io.gfile.isdir(checkpoint_path):
+            checkpoint_path = tf.train.latest_checkpoint(checkpoint_path)
+            if checkpoint_path is None:
+                raise ValueError(f"No checkpoint found in {checkpoint_path}")
+
+        # Verify checkpoint exists
+        if not tf.io.gfile.exists(checkpoint_path + '.index'):
+            raise ValueError(f"Checkpoint not found: {checkpoint_path}")
+
+        # Create checkpoint object based on what we're restoring
+        if seqnn_model is not None:
+            # Restore both model and optimizer
+            checkpoint = tf.train.Checkpoint(model=seqnn_model.model,
+                                             optimizer=self.optimizer)
+        else:
+            # Restore optimizer only
+            checkpoint = tf.train.Checkpoint(optimizer=self.optimizer)
+
+        # Load the weights
+        status = checkpoint.restore(checkpoint_path)
+
+        try:
+            # Try to use restore_on_create for TF 2.x behavior
+            status.expect_partial()
+            print(f"Restored checkpoint from {checkpoint_path}")
+        except:
+            # Fall back for older TF versions
+            print(f"Restored checkpoint from {checkpoint_path} (legacy mode)")
+
+        # Log the step number we're resuming from
+        try:
+            ckpt_end = 5 + checkpoint_path.find("ckpt-")
+            step_num = int(checkpoint_path[ckpt_end:])
+            if self.strategy is None:
+                opt_iters = self.optimizer.iterations
+            else:
+                opt_iters = self.optimizer.iterations.values[0]
+            print(
+                f"Resuming from epoch {step_num}, optimizer iteration {opt_iters}"
+            )
+        except:
+            print("Could not determine step number from checkpoint path")
 
     def fit_keras(self, seqnn_model):
         if not self.compiled:
@@ -199,7 +254,9 @@ class Trainer:
             )
         else:
             early_stop = EarlyStoppingMin(
+                #monitor="val_pearsonr",
                 monitor="val_pearsonr",
+                #mode="max",
                 mode="max",
                 verbose=1,
                 patience=self.patience,
@@ -208,6 +265,8 @@ class Trainer:
             save_best = tf.keras.callbacks.ModelCheckpoint(
                 "%s/model_best.h5" % self.out_dir,
                 save_best_only=True,
+                #mode="max",
+                #monitor="val_pearsonr",
                 mode="max",
                 monitor="val_pearsonr",
                 verbose=1,
@@ -216,8 +275,11 @@ class Trainer:
         callbacks = [
             early_stop,
             tf.keras.callbacks.TensorBoard(self.log_dir, histogram_freq=1),
-            tf.keras.callbacks.ModelCheckpoint("%s/model_check.h5" % self.out_dir),
+            tf.keras.callbacks.ModelCheckpoint("%s/model_check.h5" %
+                                               self.out_dir),
             save_best,
+            ValidationPrintingCallback(self.eval_data[0].dataset,
+                                       self.eval_epoch_batches[0]),
         ]
 
         seqnn_model.model.fit(
@@ -227,6 +289,7 @@ class Trainer:
             callbacks=callbacks,
             validation_data=self.eval_data[0].dataset,
             validation_steps=self.eval_epoch_batches[0],
+            validation_freq=1,
         )
 
     def fit2(self, seqnn_model):
@@ -258,10 +321,12 @@ class Trainer:
         for di in range(self.num_datasets):
             num_targets = seqnn_model.models[di].output_shape[-1]
             train_loss.append(tf.keras.metrics.Mean(name="train%d_loss" % di))
-            train_r.append(metrics.PearsonR(num_targets, name="train%d_r" % di))
+            train_r.append(metrics.PearsonR(num_targets,
+                                            name="train%d_r" % di))
             train_r2.append(metrics.R2(num_targets, name="train%d_r2" % di))
             valid_loss.append(tf.keras.metrics.Mean(name="valid%d_loss" % di))
-            valid_r.append(metrics.PearsonR(num_targets, name="valid%d_r" % di))
+            valid_r.append(metrics.PearsonR(num_targets,
+                                            name="valid%d_r" % di))
             valid_r2.append(metrics.R2(num_targets, name="valid%d_r2" % di))
 
         if self.strategy is None:
@@ -270,21 +335,23 @@ class Trainer:
             def train_step0(x, y):
                 with tf.GradientTape() as tape:
                     pred = seqnn_model.models[0](x, training=True)
-                    loss = self.loss_fn(y, pred) + sum(seqnn_model.models[0].losses)
+                    loss = self.loss_fn(y, pred) + tf.cast(
+                        sum(seqnn_model.models[0].losses),
+                        self.loss_fn(y, pred).dtype)
                 train_loss[0](loss)
                 train_r[0](y, pred)
                 train_r2[0](y, pred)
                 gradients = tape.gradient(
-                    loss, seqnn_model.models[0].trainable_variables
-                )
+                    loss, seqnn_model.models[0].trainable_variables)
                 self.optimizer.apply_gradients(
-                    zip(gradients, seqnn_model.models[0].trainable_variables)
-                )
+                    zip(gradients, seqnn_model.models[0].trainable_variables))
 
             @tf.function
             def eval_step0(x, y):
                 pred = seqnn_model.models[0](x, training=False)
-                loss = self.loss_fn(y, pred) + sum(seqnn_model.models[0].losses)
+                loss = self.loss_fn(y, pred) + tf.cast(
+                    sum(seqnn_model.models[0].losses),
+                    self.loss_fn(y, pred).dtype)
                 valid_loss[0](loss)
                 valid_r[0](y, pred)
                 valid_r2[0](y, pred)
@@ -295,21 +362,24 @@ class Trainer:
                 def train_step1(x, y):
                     with tf.GradientTape() as tape:
                         pred = seqnn_model.models[1](x, training=True)
-                        loss = self.loss_fn(y, pred) + sum(seqnn_model.models[1].losses)
+                        loss = self.loss_fn(y, pred) + tf.cast(
+                            sum(seqnn_model.models[1].losses),
+                            self.loss_fn(y, pred).dtype)
                     train_loss[1](loss)
                     train_r[1](y, pred)
                     train_r2[1](y, pred)
                     gradients = tape.gradient(
-                        loss, seqnn_model.models[1].trainable_variables
-                    )
+                        loss, seqnn_model.models[1].trainable_variables)
                     self.optimizer.apply_gradients(
-                        zip(gradients, seqnn_model.models[1].trainable_variables)
-                    )
+                        zip(gradients,
+                            seqnn_model.models[1].trainable_variables))
 
                 @tf.function
                 def eval_step1(x, y):
                     pred = seqnn_model.models[1](x, training=False)
-                    loss = self.loss_fn(y, pred) + sum(seqnn_model.models[1].losses)
+                    loss = self.loss_fn(y, pred) + tf.cast(
+                        sum(seqnn_model.models[1].losses),
+                        self.loss_fn(y, pred).dtype)
                     valid_loss[1](loss)
                     valid_r[1](y, pred)
                     valid_r2[1](y, pred)
@@ -322,28 +392,30 @@ class Trainer:
                     loss_batch_len = self.loss_fn(y, pred)
                     loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
                     loss = tf.reduce_sum(loss_batch) / self.batch_size
-                    loss += sum(seqnn_model.models[0].losses) / self.num_gpu
+                    loss += tf.cast(
+                        sum(seqnn_model.models[0].losses) / self.num_gpu,
+                        loss.dtype)
                 train_r[0](y, pred)
                 train_r2[0](y, pred)
                 gradients = tape.gradient(
-                    loss, seqnn_model.models[0].trainable_variables
-                )
+                    loss, seqnn_model.models[0].trainable_variables)
                 self.optimizer.apply_gradients(
-                    zip(gradients, seqnn_model.models[0].trainable_variables)
-                )
+                    zip(gradients, seqnn_model.models[0].trainable_variables))
                 return loss
 
             @tf.function
             def train_step0_distr(xd, yd):
                 replica_losses = self.strategy.run(train_step0, args=(xd, yd))
-                loss = self.strategy.reduce(
-                    tf.distribute.ReduceOp.SUM, replica_losses, axis=None
-                )
+                loss = self.strategy.reduce(tf.distribute.ReduceOp.SUM,
+                                            replica_losses,
+                                            axis=None)
                 train_loss[0](loss)
 
             def eval_step0(x, y):
                 pred = seqnn_model.models[0](x, training=False)
-                loss = self.loss_fn(y, pred) + sum(seqnn_model.models[0].losses)
+                loss = self.loss_fn(y, pred) + tf.cast(
+                    sum(seqnn_model.models[0].losses),
+                    self.loss_fn(y, pred).dtype)
                 valid_loss[0](loss)
                 valid_r[0](y, pred)
                 valid_r2[0](y, pred)
@@ -360,29 +432,33 @@ class Trainer:
                         loss_batch_len = self.loss_fn(y, pred)
                         loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
                         loss = tf.reduce_sum(loss_batch) / self.batch_size
-                        loss += sum(seqnn_model.models[1].losses) / self.num_gpu
+                        loss += tf.cast(
+                            sum(seqnn_model.models[1].losses) / self.num_gpu,
+                            loss.dtype)
                     train_loss[1](loss)
                     train_r[1](y, pred)
                     train_r2[1](y, pred)
                     gradients = tape.gradient(
-                        loss, seqnn_model.models[1].trainable_variables
-                    )
+                        loss, seqnn_model.models[1].trainable_variables)
                     self.optimizer.apply_gradients(
-                        zip(gradients, seqnn_model.models[1].trainable_variables)
-                    )
+                        zip(gradients,
+                            seqnn_model.models[1].trainable_variables))
                     return loss
 
                 @tf.function
                 def train_step1_distr(xd, yd):
-                    replica_losses = self.strategy.run(train_step1, args=(xd, yd))
-                    loss = self.strategy.reduce(
-                        tf.distribute.ReduceOp.SUM, replica_losses, axis=None
-                    )
+                    replica_losses = self.strategy.run(train_step1,
+                                                       args=(xd, yd))
+                    loss = self.strategy.reduce(tf.distribute.ReduceOp.SUM,
+                                                replica_losses,
+                                                axis=None)
                     train_loss[1](loss)
 
                 def eval_step1(x, y):
                     pred = seqnn_model.models[1](x, training=False)
-                    loss = self.loss_fn(y, pred) + sum(seqnn_model.models[1].losses)
+                    loss = self.loss_fn(y, pred) + tf.cast(
+                        sum(seqnn_model.models[1].losses),
+                        self.loss_fn(y, pred).dtype)
                     valid_loss[1](loss)
                     valid_r[1](y, pred)
                     valid_r2[1](y, pred)
@@ -394,9 +470,8 @@ class Trainer:
         # checkpoint manager
         managers = []
         for di in range(self.num_datasets):
-            ckpt = tf.train.Checkpoint(
-                model=seqnn_model.models[di], optimizer=self.optimizer
-            )
+            ckpt = tf.train.Checkpoint(model=seqnn_model.models[di],
+                                       optimizer=self.optimizer)
             ckpt_dir = "%s/model%d" % (self.out_dir, di)
             manager = tf.train.CheckpointManager(ckpt, ckpt_dir, max_to_keep=1)
             if manager.latest_checkpoint:
@@ -409,8 +484,7 @@ class Trainer:
                     opt_iters = self.optimizer.iterations.values[0]
                 print(
                     "Checkpoint restored at epoch %d, optimizer iteration %d."
-                    % (epoch_start, opt_iters)
-                )
+                    % (epoch_start, opt_iters))
             else:
                 print("No checkpoints found.")
                 epoch_start = 0
@@ -436,7 +510,8 @@ class Trainer:
         valid_summary_writer = tf.summary.create_file_writer(valid_log_dir)
 
         for ei in range(epoch_start, self.train_epochs_max):
-            if ei >= self.train_epochs_min and np.min(unimproved) > self.patience:
+            if ei >= self.train_epochs_min and np.min(
+                    unimproved) > self.patience:
                 break
             else:
                 # shuffle datasets
@@ -447,9 +522,8 @@ class Trainer:
 
                 # train
                 t0 = time.time()
-                prog_bar = tf.keras.utils.Progbar(
-                    len(self.dataset_indexes)
-                )  # Create Keras Progbar
+                prog_bar = tf.keras.utils.Progbar(len(
+                    self.dataset_indexes))  # Create Keras Progbar
                 for didx, di in enumerate(self.dataset_indexes):
                     x, y = safe_next(train_data_iters[di])
                     if self.strategy is None:
@@ -467,7 +541,8 @@ class Trainer:
                         first_step = False
                     prog_bar.add(1)
 
-                    if (ei == epoch_start) and (didx < 1000) and (didx % 100 == 1):
+                    if (ei == epoch_start) and (didx < 1000) and (didx % 100
+                                                                  == 1):
                         mem = gpu_memory_callback.on_batch_end()
                         file = open(file_path, "a")
                         file.write("%d\t%d\t%.2f\n" % (ei, didx, mem))
@@ -477,19 +552,25 @@ class Trainer:
                     print("  Data %d" % di, end="")
                     model = seqnn_model.models[di]
                     with train_summary_writer.as_default():
-                        tf.summary.scalar(
-                            "loss", train_loss[di].result().numpy(), step=ei
-                        )
-                        tf.summary.scalar("r", train_r[di].result().numpy(), step=ei)
-                        tf.summary.scalar("r2", train_r2[di].result().numpy(), step=ei)
+                        tf.summary.scalar("loss",
+                                          train_loss[di].result().numpy(),
+                                          step=ei)
+                        tf.summary.scalar("r",
+                                          train_r[di].result().numpy(),
+                                          step=ei)
+                        tf.summary.scalar("r2",
+                                          train_r2[di].result().numpy(),
+                                          step=ei)
                         train_summary_writer.flush()
 
                     # print training accuracy
-                    print(
-                        " - train_loss: %.4f" % train_loss[di].result().numpy(), end=""
-                    )
-                    print(" - train_r: %.4f" % train_r[di].result().numpy(), end="")
-                    print(" - train_r: %.4f" % train_r2[di].result().numpy(), end="")
+                    print(" - train_loss: %.4f" %
+                          train_loss[di].result().numpy(),
+                          end="")
+                    print(" - train_r: %.4f" % train_r[di].result().numpy(),
+                          end="")
+                    print(" - train_r: %.4f" % train_r2[di].result().numpy(),
+                          end="")
 
                     # evaluate
                     for x, y in self.eval_data[di].dataset:
@@ -505,19 +586,25 @@ class Trainer:
                                 eval_step1_distr(x, y)
 
                     with valid_summary_writer.as_default():
-                        tf.summary.scalar(
-                            "loss", valid_loss[di].result().numpy(), step=ei
-                        )
-                        tf.summary.scalar("r", valid_r[di].result().numpy(), step=ei)
-                        tf.summary.scalar("r2", valid_r2[di].result().numpy(), step=ei)
+                        tf.summary.scalar("loss",
+                                          valid_loss[di].result().numpy(),
+                                          step=ei)
+                        tf.summary.scalar("r",
+                                          valid_r[di].result().numpy(),
+                                          step=ei)
+                        tf.summary.scalar("r2",
+                                          valid_r2[di].result().numpy(),
+                                          step=ei)
                         valid_summary_writer.flush()
 
                     # print validation accuracy
-                    print(
-                        " - valid_loss: %.4f" % valid_loss[di].result().numpy(), end=""
-                    )
-                    print(" - valid_r: %.4f" % valid_r[di].result().numpy(), end="")
-                    print(" - valid_r2: %.4f" % valid_r2[di].result().numpy(), end="")
+                    print(" - valid_loss: %.4f" %
+                          valid_loss[di].result().numpy(),
+                          end="")
+                    print(" - valid_r: %.4f" % valid_r[di].result().numpy(),
+                          end="")
+                    print(" - valid_r2: %.4f" % valid_r2[di].result().numpy(),
+                          end="")
                     early_stop_stat = valid_r[di].result().numpy()
 
                     # upload to gcs
@@ -575,18 +662,19 @@ class Trainer:
                 def train_step(x, y):
                     with tf.GradientTape() as tape:
                         pred = model(x, training=True)
-                        loss = self.loss_fn(y, pred) + sum(model.losses)
+                        loss = self.loss_fn(y, pred) + tf.cast(
+                            sum(model.losses),
+                            self.loss_fn(y, pred).dtype)
                         scaled_loss = self.optimizer.get_scaled_loss(loss)
                     train_loss(loss)
                     train_r(y, pred)
                     train_r2(y, pred)
-                    scaled_gradients = tape.gradient(
-                        scaled_loss, model.trainable_variables
-                    )
-                    gradients = self.optimizer.get_unscaled_gradients(scaled_gradients)
+                    scaled_gradients = tape.gradient(scaled_loss,
+                                                     model.trainable_variables)
+                    gradients = self.optimizer.get_unscaled_gradients(
+                        scaled_gradients)
                     self.optimizer.apply_gradients(
-                        zip(gradients, model.trainable_variables)
-                    )
+                        zip(gradients, model.trainable_variables))
 
             else:
 
@@ -594,23 +682,26 @@ class Trainer:
                 def train_step(x, y):
                     with tf.GradientTape() as tape:
                         pred = model(x, training=True)
-                        loss = self.loss_fn(y, pred) + sum(model.losses)
+                        loss = self.loss_fn(y, pred) + tf.cast(
+                            sum(model.losses),
+                            self.loss_fn(y, pred).dtype)
                     train_loss(loss)
                     train_r(y, pred)
                     train_r2(y, pred)
                     gradients = tape.gradient(loss, model.trainable_variables)
                     if self.agc_clip is not None:
                         gradients = adaptive_clip_grad(
-                            model.trainable_variables, gradients, self.agc_clip
-                        )
+                            model.trainable_variables, gradients,
+                            self.agc_clip)
                     self.optimizer.apply_gradients(
-                        zip(gradients, model.trainable_variables)
-                    )
+                        zip(gradients, model.trainable_variables))
 
             @tf.function
             def eval_step(x, y):
                 pred = model(x, training=False)
-                loss = self.loss_fn(y, pred) + sum(model.losses)
+                loss = self.loss_fn(y, pred) + tf.cast(
+                    sum(model.losses),
+                    self.loss_fn(y, pred).dtype)
                 valid_loss(loss)
                 valid_r(y, pred)
                 valid_r2(y, pred)
@@ -623,26 +714,28 @@ class Trainer:
                     loss_batch_len = self.loss_fn(y, pred)
                     loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
                     loss = tf.reduce_sum(loss_batch) / self.batch_size
-                    loss += sum(model.losses) / self.num_gpu
+                    loss += tf.cast(
+                        sum(model.losses) / self.num_gpu, loss.dtype)
                 train_r(y, pred)
                 train_r2(y, pred)
                 gradients = tape.gradient(loss, model.trainable_variables)
                 self.optimizer.apply_gradients(
-                    zip(gradients, model.trainable_variables)
-                )
+                    zip(gradients, model.trainable_variables))
                 return loss
 
             @tf.function
             def train_step_distr(xd, yd):
                 replica_losses = self.strategy.run(train_step, args=(xd, yd))
-                loss = self.strategy.reduce(
-                    tf.distribute.ReduceOp.SUM, replica_losses, axis=None
-                )
+                loss = self.strategy.reduce(tf.distribute.ReduceOp.SUM,
+                                            replica_losses,
+                                            axis=None)
                 train_loss(loss)
 
             def eval_step(x, y):
                 pred = model(x, training=False)
-                loss = self.loss_fn(y, pred) + sum(model.losses)
+                loss = self.loss_fn(y, pred) + tf.cast(
+                    sum(model.losses),
+                    self.loss_fn(y, pred).dtype)
                 valid_loss(loss)
                 valid_r(y, pred)
                 valid_r2(y, pred)
@@ -652,8 +745,9 @@ class Trainer:
                 return self.strategy.run(eval_step, args=(xd, yd))
 
         # checkpoint manager
-        ckpt = tf.train.Checkpoint(model=seqnn_model.model, optimizer=self.optimizer)
-        manager = tf.train.CheckpointManager(ckpt, self.out_dir, max_to_keep=1)
+        ckpt = tf.train.Checkpoint(model=seqnn_model.model,
+                                   optimizer=self.optimizer)
+        manager = tf.train.CheckpointManager(ckpt, self.out_dir, max_to_keep=5)
         if manager.latest_checkpoint:
             ckpt.restore(manager.latest_checkpoint)
             ckpt_end = 5 + manager.latest_checkpoint.find("ckpt-")
@@ -662,10 +756,8 @@ class Trainer:
                 opt_iters = self.optimizer.iterations
             else:
                 opt_iters = self.optimizer.iterations.values[0]
-            print(
-                "Checkpoint restored at epoch %d, optimizer iteration %d."
-                % (epoch_start, opt_iters)
-            )
+            print("Checkpoint restored at epoch %d, optimizer iteration %d." %
+                  (epoch_start, opt_iters))
         else:
             print("No checkpoints found.")
             epoch_start = 0
@@ -750,8 +842,8 @@ class Trainer:
                     valid_summary_writer.flush()
 
                 print(
-                    " - valid_loss: %.4f - valid_r: %.4f - valid_r2: %.4f"
-                    % (valid_loss_epoch, valid_r_epoch, valid_r2_epoch),
+                    " - valid_loss: %.4f - valid_r: %.4f - valid_r2: %.4f" %
+                    (valid_loss_epoch, valid_r_epoch, valid_r2_epoch),
                     end="",
                 )
 
@@ -787,16 +879,15 @@ class Trainer:
         """Make optimizer object from given parameters."""
         cyclical1 = True
         for lrs_param in [
-            "initial_learning_rate",
-            "maximal_learning_rate",
-            "final_learning_rate",
-            "train_epochs_cycle1",
+                "initial_learning_rate",
+                "maximal_learning_rate",
+                "final_learning_rate",
+                "train_epochs_cycle1",
         ]:
             cyclical1 = cyclical1 & (lrs_param in self.params)
         if cyclical1:
             step_size = self.params["train_epochs_cycle1"] * sum(
-                self.train_epoch_batches
-            )
+                self.train_epoch_batches)
             initial_learning_rate = self.params.get("initial_learning_rate")
             lr_schedule = Cyclical1LearningRate(
                 initial_learning_rate=self.params["initial_learning_rate"],
@@ -872,7 +963,8 @@ class Trainer:
             )
 
         else:
-            print("Cannot recognize optimization algorithm %s" % optimizer_type)
+            print("Cannot recognize optimization algorithm %s" %
+                  optimizer_type)
             exit(1)
 
         if loss_scale:
@@ -886,7 +978,7 @@ class Trainer:
 
 def compute_norm(x, axis, keepdims):
     """Compute L2 norm of a tensor across an axis."""
-    return tf.math.reduce_sum(x**2, axis=axis, keepdims=keepdims) ** 0.5
+    return tf.math.reduce_sum(x**2, axis=axis, keepdims=keepdims)**0.5
 
 
 def unitwise_norm(x):
@@ -894,7 +986,9 @@ def unitwise_norm(x):
     if len(x.get_shape()) <= 1:  # Scalars and vectors
         axis = None
         keepdims = False
-    elif len(x.get_shape()) in [2, 3]:  # Linear layers of shape IO or multihead linear
+    elif len(x.get_shape()) in [
+            2, 3
+    ]:  # Linear layers of shape IO or multihead linear
         axis = 0
         keepdims = True
     elif len(x.get_shape()) == 4:  # Conv kernels of shape HWIO
@@ -909,9 +1003,10 @@ def unitwise_norm(x):
     return compute_norm(x, axis, keepdims)
 
 
-def adaptive_clip_grad(
-    parameters, gradients, clip_factor: float = 0.1, eps: float = 1e-3
-):
+def adaptive_clip_grad(parameters,
+                       gradients,
+                       clip_factor: float = 0.1,
+                       eps: float = 1e-3):
     """Adaptive gradient clipping."""
     new_grads = []
     for params, grads in zip(parameters, gradients):
@@ -951,11 +1046,14 @@ class EarlyStoppingMin(tf.keras.callbacks.EarlyStopping):
                 self.model.stop_training = True
                 if self.restore_best_weights:
                     if self.verbose > 0:
-                        print("Restoring model weights from the end of the best epoch.")
+                        print(
+                            "Restoring model weights from the end of the best epoch."
+                        )
                     self.model.set_weights(self.best_weights)
 
 
-class Cyclical1LearningRate(tf.keras.optimizers.schedules.LearningRateSchedule):
+class Cyclical1LearningRate(tf.keras.optimizers.schedules.LearningRateSchedule
+                            ):
     """A LearningRateSchedule that uses cyclical schedule.
     https://yashuseth.blog/2018/11/26/hyper-parameter-tuning-best-practices-learning-rate-batch-size-momentum-weight-decay/
 
@@ -985,8 +1083,7 @@ class Cyclical1LearningRate(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __call__(self, step):
         with tf.name_scope(self.name or "Cyclical1LearningRate"):
             initial_learning_rate = tf.convert_to_tensor(
-                self.initial_learning_rate, name="initial_learning_rate"
-            )
+                self.initial_learning_rate, name="initial_learning_rate")
             dtype = initial_learning_rate.dtype
             maximal_learning_rate = tf.cast(self.maximal_learning_rate, dtype)
             final_learning_rate = tf.cast(self.final_learning_rate, dtype)
@@ -998,9 +1095,9 @@ class Cyclical1LearningRate(tf.keras.optimizers.schedules.LearningRateSchedule):
             lr = tf.where(
                 step > 2 * step_size,
                 final_learning_rate,
-                initial_learning_rate
-                + (maximal_learning_rate - initial_learning_rate)
-                * tf.maximum(tf.cast(0, dtype), (1 - x)),
+                initial_learning_rate +
+                (maximal_learning_rate - initial_learning_rate) *
+                tf.maximum(tf.cast(0, dtype), (1 - x)),
             )
             return lr
 
@@ -1053,10 +1150,10 @@ class WarmUp(tf.keras.optimizers.schedules.LearningRateSchedule):
             warmup_steps_float = tf.cast(self.warmup_steps, tf.float32)
             warmup_percent_done = global_step_float / warmup_steps_float
             warmup_learning_rate = self.initial_learning_rate * tf.math.pow(
-                warmup_percent_done, self.power
-            )
+                warmup_percent_done, self.power)
             if callable(self.decay_schedule):
-                warmed_learning_rate = self.decay_schedule(step - self.warmup_steps)
+                warmed_learning_rate = self.decay_schedule(step -
+                                                           self.warmup_steps)
             else:
                 warmed_learning_rate = self.decay_schedule
             return tf.cond(
@@ -1105,9 +1202,11 @@ def CheckGradientNA(gradients):
 
 
 class GPUMemoryUsageCallback(tf.keras.callbacks.Callback):
+
     def __init__(self):
         super().__init__()
-        self.gpu_available = tf.config.experimental.list_physical_devices("GPU")
+        self.gpu_available = tf.config.experimental.list_physical_devices(
+            "GPU")
 
     def on_train_begin(self, logs=None):
         if self.gpu_available:
@@ -1120,3 +1219,58 @@ class GPUMemoryUsageCallback(tf.keras.callbacks.Callback):
             current_memory = gpu_memory["peak"] / 1e9  # Convert to GB
             return current_memory
         return 0  # No GPU, return 0
+
+
+class ValidationPrintingCallback(tf.keras.callbacks.Callback):
+    """打印验证集指标的回调，即使 fit 方法不计算它们。"""
+
+    def __init__(self, validation_data, validation_steps):
+        super().__init__()
+        self.validation_data = validation_data
+        self.validation_steps = validation_steps
+
+    def on_epoch_end(self, epoch, logs=None):
+        # 获取验证数据迭代器
+        validation_iter = iter(self.validation_data)
+        val_loss_sum = 0
+        val_pearsonr_sum = 0
+        val_r2_sum = 0
+        steps = 0
+
+        # 手动计算验证指标
+        for _ in range(self.validation_steps):
+            try:
+                x_val, y_val = next(validation_iter)
+                # 计算预测值
+                y_pred = self.model(x_val, training=False)
+                # 计算损失
+                val_loss = self.model.loss(y_val, y_pred)
+                val_loss_sum += float(tf.reduce_mean(val_loss))
+
+                # 计算 pearsonr
+                pearsonr_metric = metrics.PearsonR(y_pred.shape[-1])
+                pearsonr_metric.update_state(y_val, y_pred)
+                val_pearsonr_sum += float(pearsonr_metric.result())
+
+                # 计算 r2
+                r2_metric = metrics.R2(y_pred.shape[-1])
+                r2_metric.update_state(y_val, y_pred)
+                val_r2_sum += float(r2_metric.result())
+
+                steps += 1
+            except StopIteration:
+                break
+
+        if steps > 0:
+            val_loss_avg = val_loss_sum / steps
+            val_pearsonr_avg = val_pearsonr_sum / steps
+            val_r2_avg = val_r2_sum / steps
+
+            print(
+                f" - val_loss: {val_loss_avg:.4f} - val_pearsonr: {val_pearsonr_avg:.4f} - val_r2: {val_r2_avg:.4f}"
+            )
+
+            # 保存到 logs 中以便其他回调使用
+            logs['val_loss'] = val_loss_avg
+            logs['val_pearsonr'] = val_pearsonr_avg
+            logs['val_r2'] = val_r2_avg

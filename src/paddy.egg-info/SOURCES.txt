@@ -1,4 +1,6 @@
-setup.py
+LICENSE
+README.md
+pyproject.toml
 src/paddy/__init__.py
 src/paddy/blocks.py
 src/paddy/dataset.py
@@ -9,5 +11,11 @@ src/paddy/trainer.py
 src/paddy.egg-info/PKG-INFO
 src/paddy.egg-info/SOURCES.txt
 src/paddy.egg-info/dependency_links.txt
+src/paddy.egg-info/entry_points.txt
 src/paddy.egg-info/requires.txt
 src/paddy.egg-info/top_level.txt
+src/paddy/helpers/extract_label.py
+src/paddy/helpers/gcs_utils.py
+src/paddy/scripts/paddy_data.py
+src/paddy/scripts/paddy_gs_data.py
+src/paddy/scripts/paddy_train.py

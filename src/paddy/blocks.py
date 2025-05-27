@@ -2047,6 +2047,42 @@ def dense_head(
     return current
 
 
+def dense_position(inputs,
+                   hidden_dim=768,
+                   position_dropout=0.1,
+                   l2_scale=0.01,
+                   kernel_initializer="he_normal",
+                   position_embedding_type="learnable",
+                   max_sequence_length=None,
+                   **kwargs):
+    """Projects input features to a higher dimension and adds position embeddings.
+    
+    This function only handles the feature projection and position embedding steps,
+    and does NOT apply any Transformer layers. It's designed to be used in 
+    combination with other blocks like 'transformer' in a modular pipeline.
+    
+    Args:
+        inputs: Input tensor with shape [batch_size, seq_length, features]
+        hidden_dim: Dimension to project input features to
+        position_dropout: Dropout rate for position embeddings
+        l2_scale: L2 regularization scale
+        kernel_initializer: Initializer for linear layers
+        
+    Returns:
+        Tensor with shape [batch_size, seq_length, hidden_dim] with position information
+    """
+    # directly use PositionalEmbedding layer, let it handle projection and position embedding.
+    return layers.PositionalEmbedding(
+        hidden_dim=hidden_dim,
+        dropout_rate=position_dropout,
+        kernel_initializer=kernel_initializer,
+        embedding_type=position_embedding_type,
+        max_sequence_length=max_sequence_length,
+        l2_scale=l2_scale,
+        add_positions=True,  
+        name="positional_embedding_layer")(inputs)
+
+
 ############################################################
 # Dictionary
 ############################################################
@@ -2087,6 +2123,7 @@ name_func = {
     "unet_concat": unet_concat,
     "upper_tri": upper_tri,
     "wheeze_excite": wheeze_excite,
+    "dense_position": dense_position,
 }
 
 keras_func = {

@@ -1,9 +1,42 @@
 Metadata-Version: 2.4
 Name: paddy
-Version: 0.1
-Requires-Python: >=3.6
-Requires-Dist: tensorflow
+Version: 0.1.0
+Summary: Deep Learning models
+Author-email: GooLey <gooleywm@gmail.com>
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: tensorflow>=2.15
 Requires-Dist: numpy
 Requires-Dist: pyyaml
-Dynamic: requires-dist
-Dynamic: requires-python
+Requires-Dist: pandas
+Requires-Dist: h5py
+Requires-Dist: natsort
+Requires-Dist: tqdm
+Requires-Dist: google-cloud-storage
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Dynamic: license-file
+
+## Examples
+```bash
+git clone https://github.com/GooLey1025/paddy.git
+cd paddy
+pip install -e .
+
+cd examples
+
+# prepare label file
+extract_label.py -x Nip_ATGsite_UD16K_Bed.xlsx -o 2_P8_Nip8_23tissues.Exp.csv -s 8
+
+# generate tfrecords
+paddy_data.py --h5_dir data/seqs_cov --output_dir 23tissues --label_file 2_P8_Nip8_23tissues.Exp --train_ratio 0.8 --valid_ratio 0.1 --test_ratio 0.1
+
+# train
+paddy_train.py  -k -m  -o 300eps_train_out -l 300eps_log_out params.yaml 23tissues
+paddy_train.py  -o 300eps_train_out -l 300eps_log_out params.yaml 23tissues
+
+# training visualization
+tensorboard --logdir=./300eps_log_out --host 0.0.0.0 --port 6006
