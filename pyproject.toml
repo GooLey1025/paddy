@@ -24,7 +24,8 @@ dependencies = [
     "pysam",  
     "matplotlib",  
     "tensorboard",  
-    "scikit-learn",  
+    "scikit-learn",
+    "openpyxl",  
 ]
 
 [project.optional-dependencies]
