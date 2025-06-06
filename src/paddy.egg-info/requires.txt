@@ -1,4 +1,4 @@
-tensorflow>=2.15
+tensorflow<2.16,>=2.15
 numpy
 pyyaml
 pandas
@@ -6,7 +6,14 @@ h5py
 natsort
 tqdm
 google-cloud-storage
+pysam
+matplotlib
+tensorboard
+scikit-learn
+openpyxl
 
 [dev]
 pytest
 black
+isort
+flake8

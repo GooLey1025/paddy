@@ -10,10 +10,10 @@ authors = [
     {name = "GooLey", email = "goley04@foxmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = "==3.10.*"
 license = {text = "MIT"}
 dependencies = [
-    "tensorflow>=2.15",
+    "tensorflow>=2.15,<2.16",
     "numpy",
     "pyyaml",
     "pandas",
@@ -24,7 +24,8 @@ dependencies = [
     "pysam",  
     "matplotlib",  
     "tensorboard",  
-    "scikit-learn",  
+    "scikit-learn",
+    "openpyxl",  
 ]
 
 [project.optional-dependencies]

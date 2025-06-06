@@ -1,4 +1,6 @@
 [console_scripts]
 extract_label = paddy.helpers.extract_label:main
 paddy_data = paddy.scripts.paddy_data:main
+paddy_eval = paddy.scripts.paddy_eval:main
 paddy_train = paddy.scripts.paddy_train:main
+paddy_train_grid = paddy.scripts.paddy_train_grid:main
