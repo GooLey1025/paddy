@@ -81,12 +81,6 @@ def main():
         help="Dataset split label for eg TFR pattern [Default: %(default)s]",
     )
     parser.add_argument(
-        "--tfr_pattern",
-        default=None,
-        help=
-        "TFR pattern string appended to data_dir/tfrecords for subsetting [Default: %(default)s]",
-    )
-    parser.add_argument(
         "--transpose_input",
         default=False,
         action="store_true",
@@ -135,7 +129,6 @@ def main():
         split_label=args.split,
         batch_size=params_train["batch_size"],
         mode="eval",
-        tfr_pattern=args.tfr_pattern,
         transpose_input=args.transpose_input,
     )
 

@@ -34,7 +34,6 @@ class TracksDataset:
         shuffle_buffer: int = 128,
         cycle_length: int = 4,
         mode: str = "eval",
-        tfr_pattern: str = None,
         repeat: bool = False,
         transpose_input: bool = False,
     ):
@@ -44,7 +43,6 @@ class TracksDataset:
         self.shuffle_buffer = shuffle_buffer
         self.cycle_length = cycle_length
         self.mode = mode
-        self.tfr_pattern = tfr_pattern
         self.repeat = repeat
         self.transpose_input = transpose_input
 
@@ -59,10 +57,12 @@ class TracksDataset:
         self.target_length = data_stats.get("target_length", 1)
         self.num_targets = data_stats["num_targets"]
 
+        
         self.tfr_path = f"{self.data_dir}/tfrecords/{self.split_label}-*.tfr"
 
         self.make_dataset(cycle_length=self.cycle_length)
 
+    
     def generate_parser(self, raw: bool = False):
         """Generate parser function for TFRecordDataset."""
 

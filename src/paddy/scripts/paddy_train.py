@@ -17,36 +17,20 @@ def main():
     parser = argparse.ArgumentParser(description="Train a model")
     parser.add_argument("params_file", help="YAML file with model parameters")
     parser.add_argument(
-        "-k",
-        "--keras_fit",
-        action="store_true",
-        default=False,
-        help="Train with Keras fit method [Default: %(default)s]",
-    )
-    parser.add_argument(
         "-m",
         "--mixed_precision",
         action="store_true",
         default=False,
-        help="Train with mixed precision [Default: %(default)s]",
+        help="Train with mixed precision if your gpu supports it. \n"
+        " If not supported, float16 will still be used to reduce gpu memory usage. \n"
+        " In theory, it is recommended to enable it accompanied by --loss_scale. \n"
+        " [Default: %(default)s]",
     )
     parser.add_argument(
         "-o",
         "--out_dir",
         default="train_out",
         help="Output directory [Default: %(default)s]",
-    )
-    parser.add_argument(
-        "--tfr_train",
-        default=None,
-        help=
-        "Training TFR pattern string appended to data_dir/tfrecords [Default: %(default)s]",
-    )
-    parser.add_argument(
-        "--tfr_eval",
-        default=None,
-        help=
-        "Evaluation TFR pattern string appended to data_dir/tfrecords [Default: %(default)s]",
     )
     parser.add_argument(
         "-l",
@@ -65,14 +49,14 @@ def main():
         "--restore",
         action="store_true",
         default=False,
-        help="Restore model from checkpoint in out_dir [Default: %(default)s]",
+        help=
+        "Restore model from checkpoint in args.out_dir (if not specified, will start training from scratch) [Default: %(default)s]",
     )
     parser.add_argument(
-        "--restore_step",
-        type=int,
-        default=None,
-        help=
-        "Specific checkpoint step to restore (will use latest if not specified) [Default: %(default)s]",
+        "--loss_scale",
+        action="store_true",
+        default=False,
+        help="Use loss scale for training. A little bit slower but more stable. [Default: %(default)s]",
     )
     parser.add_argument("data_dirs",
                         nargs="+",
@@ -87,6 +71,7 @@ def main():
         params = yaml.safe_load(f)
     params_model = params["model"]
     params_train = params["train"]
+    params_model["transpose_input"] = args.transpose_input
 
     train_data = []
     eval_data = []
@@ -94,15 +79,16 @@ def main():
 
     for data_dir in args.data_dirs:
         train_data.append(
-            dataset.TracksDataset(data_dir,
-                                  split_label="train",
-                                  batch_size=params_train["batch_size"],
-                                  shuffle_buffer=params_train.get(
-                                      "shuffle_buffer", 128),
-                                  mode="train",
-                                  tfr_pattern=args.tfr_train,
-                                  repeat=True,
-                                  transpose_input=args.transpose_input))
+            dataset.TracksDataset(
+                data_dir,
+                split_label="train",
+                batch_size=params_train["batch_size"],
+                shuffle_buffer=params_train.get("shuffle_buffer", 128),
+                mode="train",
+                repeat=True,
+                transpose_input=args.transpose_input,
+            )
+        )
 
         eval_data.append(
             dataset.TracksDataset(
@@ -110,7 +96,6 @@ def main():
                 split_label="valid",
                 batch_size=params_train["batch_size"],
                 mode="eval",
-                tfr_pattern=args.tfr_eval,
                 transpose_input=args.transpose_input,
             ))
 
@@ -122,7 +107,6 @@ def main():
         # one GPU
 
         # initialize model
-        params_model["transpose_input"] = args.transpose_input
         seqnn_model = seqnn.SeqNN(params_model)
 
         seqnn_trainer = trainer.Trainer(
@@ -131,35 +115,11 @@ def main():
             eval_data,
             args.out_dir,
             args.log_dir,
+            loss_scale=args.loss_scale
         )
         seqnn_trainer.compile(seqnn_model)
 
         checkpoint_dir = args.out_dir
-
-        if args.restore and os.path.exists(checkpoint_dir):
-            if args.restore_step is not None:
-                checkpoint_path = os.path.join(checkpoint_dir,
-                                               f"ckpt-{args.restore_step}")
-                if os.path.exists(checkpoint_path + ".index"):
-                    print(
-                        f"Restoring model from checkpoint step {args.restore_step}..."
-                    )
-                    seqnn_trainer.restore(checkpoint_path, seqnn_model)
-                else:
-                    print(
-                        f"Specified checkpoint {checkpoint_path} not found, starting from scratch."
-                    )
-            else:
-                latest_checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
-                if latest_checkpoint is not None:
-                    print(
-                        f"Restoring model from latest checkpoint {latest_checkpoint}..."
-                    )
-                    seqnn_trainer.restore(latest_checkpoint, seqnn_model)
-                else:
-                    print(
-                        f"No checkpoints found in {checkpoint_dir}, starting from scratch."
-                    )
 
     else:
         ########################################
@@ -170,7 +130,7 @@ def main():
     # train model
 
     if len(args.data_dirs) == 1:
-        seqnn_trainer.fit_tape(seqnn_model)
+        seqnn_trainer.fit_tape(seqnn_model, restore=args.restore)
     else:
         print("fit2 not implemented yet.")
         exit()

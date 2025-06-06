@@ -61,7 +61,7 @@ model:
       filters_init: 312
       filters_end: 512
       divisible_by: 32
-      kernel_size: 10
+      kernel_size: 15
       num_convs: 1
       pool_size: 2
       repeat: 4
