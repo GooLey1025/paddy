@@ -2079,8 +2079,10 @@ def dense_position(inputs,
         embedding_type=position_embedding_type,
         max_sequence_length=max_sequence_length,
         l2_scale=l2_scale,
-        add_positions=True,  
+        add_positions=True,
         name="positional_embedding_layer")(inputs)
+
+
 
 
 ############################################################
@@ -2123,7 +2125,7 @@ name_func = {
     "unet_concat": unet_concat,
     "upper_tri": upper_tri,
     "wheeze_excite": wheeze_excite,
-    "dense_position": dense_position,
+    "dense_position": dense_position
 }
 
 keras_func = {

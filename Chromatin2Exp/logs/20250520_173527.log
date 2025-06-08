@@ -1,0 +1,117 @@
+2025-05-20 17:35:27.730917: I tensorflow/core/util/port.cc:113] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-05-20 17:35:27.750337: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2025-05-20 17:35:27.750374: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:607] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2025-05-20 17:35:27.750876: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1515] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2025-05-20 17:35:27.753839: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2025-05-20 17:35:28.093754: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+2025-05-20 17:35:28.505051: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.538111: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.539977: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.602024: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.603702: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.605169: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.805738: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.807368: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.808557: I external/local_xla/xla/stream_executor/cuda/cuda_executor.cc:901] successful NUMA node read from SysFS had negative value (-1), but there must be at least one NUMA node, so returning NUMA node zero. See more at https://github.com/torvalds/linux/blob/v6.0/Documentation/ABI/testing/sysfs-bus-pci#L344-L355
+2025-05-20 17:35:28.809921: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 7382 MB memory:  -> device: 0, name: NVIDIA GeForce RTX 4070, pci bus id: 0000:01:00.0, compute capability: 8.9
+Model: "model_1"
+__________________________________________________________________________________________________
+ Layer (type)                Output Shape                 Param #   Connected to                  
+==================================================================================================
+ tracks (InputLayer)         [(None, 106, 1024)]          0         []                            
+                                                                                                  
+ layer_normalization (Layer  (None, 106, 1024)            2048      ['tracks[0][0]']              
+ Normalization)                                                                                   
+                                                                                                  
+ multihead_attention (Multi  (None, 106, 1024)            3278848   ['layer_normalization[0][0]'] 
+ headAttention)                                                                                   
+                                                                                                  
+ dropout (Dropout)           (None, 106, 1024)            0         ['multihead_attention[0][0]'] 
+                                                                                                  
+ add (Add)                   (None, 106, 1024)            0         ['tracks[0][0]',              
+                                                                     'dropout[0][0]']             
+                                                                                                  
+ layer_normalization_1 (Lay  (None, 106, 1024)            2048      ['add[0][0]']                 
+ erNormalization)                                                                                 
+                                                                                                  
+ dense (Dense)               (None, 106, 2048)            2099200   ['layer_normalization_1[0][0]'
+                                                                    ]                             
+                                                                                                  
+ dropout_1 (Dropout)         (None, 106, 2048)            0         ['dense[0][0]']               
+                                                                                                  
+ re_lu (ReLU)                (None, 106, 2048)            0         ['dropout_1[0][0]']           
+                                                                                                  
+ dense_1 (Dense)             (None, 106, 1024)            2098176   ['re_lu[0][0]']               
+                                                                                                  
+ dropout_2 (Dropout)         (None, 106, 1024)            0         ['dense_1[0][0]']             
+                                                                                                  
+ add_1 (Add)                 (None, 106, 1024)            0         ['add[0][0]',                 
+                                                                     'dropout_2[0][0]']           
+                                                                                                  
+ dense_2 (Dense)             (None, 106, 1)               1025      ['add_1[0][0]']               
+                                                                                                  
+ softmax (Softmax)           (None, 106, 1)               0         ['dense_2[0][0]']             
+                                                                                                  
+ multiply (Multiply)         (None, 106, 1024)            0         ['add_1[0][0]',               
+                                                                     'softmax[0][0]']             
+                                                                                                  
+ lambda (Lambda)             (None, 1024)                 0         ['multiply[0][0]']            
+                                                                                                  
+ dense_3 (Dense)             (None, 512)                  524800    ['lambda[0][0]']              
+                                                                                                  
+ dense_4 (Dense)             (None, 256)                  131328    ['dense_3[0][0]']             
+                                                                                                  
+ re_lu_1 (ReLU)              (None, 256)                  0         ['dense_4[0][0]']             
+                                                                                                  
+ dense_5 (Dense)             (None, 128)                  32896     ['re_lu_1[0][0]']             
+                                                                                                  
+ dense_6 (Dense)             (None, 23)                   2967      ['dense_5[0][0]']             
+                                                                                                  
+==================================================================================================
+Total params: 8173336 (31.18 MB)
+Trainable params: 8173336 (31.18 MB)
+Non-trainable params: 0 (0.00 Byte)
+__________________________________________________________________________________________________
+2025-05-20 17:35:30.843687: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:454] Loaded cuDNN version 8904
+2025-05-20 17:35:31.599740: I external/local_xla/xla/service/service.cc:168] XLA service 0x7c8230e70380 initialized for platform CUDA (this does not guarantee that XLA will be used). Devices:
+2025-05-20 17:35:31.599777: I external/local_xla/xla/service/service.cc:176]   StreamExecutor device (0): NVIDIA GeForce RTX 4070, Compute Capability 8.9
+2025-05-20 17:35:31.602426: I tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.cc:269] disabling MLIR crash reproducer, set env var `MLIR_CRASH_REPRODUCER_DIRECTORY` to enable.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1747733731.643049   36336 device_compiler.h:186] Compiled cluster using XLA!  This line is logged at most once for the lifetime of the process.
+None
+model_strides [1]
+target_lengths [23]
+target_crops [41]
+No checkpoints found.
+Successful first step!
+/home/gl/anaconda3/envs/borzoi/lib/python3.10/site-packages/keras/src/engine/training.py:3103: UserWarning: You are saving your model as an HDF5 file via `model.save()`. This file format is considered legacy. We recommend using instead the native Keras format, e.g. `model.save('my_model.keras')`.
+  saving_api.save_model(
+Epoch 0 - 75s - train_loss: 0.7727 - train_r: 0.2585 - train_r2: -0.5950 - valid_loss: 0.3702 - valid_r: 0.5887 - valid_r2: 0.2263 - best!
+Epoch 1 - 94s - train_loss: 0.3211 - train_r: 0.5886 - train_r2: 0.3419 - valid_loss: 0.3056 - valid_r: 0.6063 - valid_r2: 0.3606 - best!
+Epoch 2 - 93s - train_loss: 0.3508 - train_r: 0.5468 - train_r2: 0.2836 - valid_loss: 0.3156 - valid_r: 0.5870 - valid_r2: 0.3417
+Epoch 3 - 110s - train_loss: 0.2955 - train_r: 0.6267 - train_r2: 0.3948 - valid_loss: 0.3115 - valid_r: 0.5966 - valid_r2: 0.3505
+Epoch 4 - 125s - train_loss: 0.2978 - train_r: 0.6228 - train_r2: 0.3900 - valid_loss: 0.3004 - valid_r: 0.6166 - valid_r2: 0.3723 - best!
+Epoch 5 - 130s - train_loss: 0.2831 - train_r: 0.6458 - train_r2: 0.4193 - valid_loss: 0.2973 - valid_r: 0.6139 - valid_r2: 0.3783
+Epoch 6 - 131s - train_loss: 0.2761 - train_r: 0.6566 - train_r2: 0.4334 - valid_loss: 0.2916 - valid_r: 0.6244 - valid_r2: 0.3900 - best!
+Epoch 7 - 131s - train_loss: 0.2713 - train_r: 0.6640 - train_r2: 0.4432 - valid_loss: 0.2939 - valid_r: 0.6254 - valid_r2: 0.3849
+Epoch 8 - 131s - train_loss: 0.2721 - train_r: 0.6630 - train_r2: 0.4418 - valid_loss: 0.2945 - valid_r: 0.6231 - valid_r2: 0.3839
+Epoch 9 - 131s - train_loss: 0.2688 - train_r: 0.6678 - train_r2: 0.4483 - valid_loss: 0.2966 - valid_r: 0.6218 - valid_r2: 0.3795
+Epoch 10 - 131s - train_loss: 0.2941 - train_r: 0.6285 - train_r2: 0.3965 - valid_loss: 0.3334 - valid_r: 0.5565 - valid_r2: 0.3048
+Epoch 11 - 131s - train_loss: 0.2943 - train_r: 0.6285 - train_r2: 0.3971 - valid_loss: 0.3079 - valid_r: 0.6056 - valid_r2: 0.3569
+Epoch 12 - 131s - train_loss: 0.2686 - train_r: 0.6677 - train_r2: 0.4482 - valid_loss: 0.3044 - valid_r: 0.6174 - valid_r2: 0.3643
+Epoch 13 - 131s - train_loss: 0.2635 - train_r: 0.6757 - train_r2: 0.4590 - valid_loss: 0.3050 - valid_r: 0.6180 - valid_r2: 0.3627
+Epoch 14 - 131s - train_loss: 0.2715 - train_r: 0.6638 - train_r2: 0.4429 - valid_loss: 0.3098 - valid_r: 0.6014 - valid_r2: 0.3533
+Epoch 15 - 131s - train_loss: 0.2718 - train_r: 0.6635 - train_r2: 0.4425 - valid_loss: 0.2934 - valid_r: 0.6243 - valid_r2: 0.3869
+Epoch 16 - 130s - train_loss: 0.2852 - train_r: 0.6431 - train_r2: 0.4155 - valid_loss: 0.3127 - valid_r: 0.6028 - valid_r2: 0.3471
+Epoch 17 - 131s - train_loss: 0.2805 - train_r: 0.6504 - train_r2: 0.4251 - valid_loss: 0.3138 - valid_r: 0.5990 - valid_r2: 0.3455
+Epoch 18 - 131s - train_loss: 0.3012 - train_r: 0.6179 - train_r2: 0.3835 - valid_loss: 0.3768 - valid_r: 0.4656 - valid_r2: 0.2166
+Epoch 19 - 131s - train_loss: 0.3241 - train_r: 0.5795 - train_r2: 0.3377 - valid_loss: 0.4035 - valid_r: 0.5154 - valid_r2: 0.1630
+Epoch 20 - 114s - train_loss: 0.3277 - train_r: 0.5734 - train_r2: 0.3307 - valid_loss: 0.3647 - valid_r: 0.5461 - valid_r2: 0.2427
+Epoch 21 - 112s - train_loss: 0.3164 - train_r: 0.5926 - train_r2: 0.3531 - valid_loss: 0.3491 - valid_r: 0.5246 - valid_r2: 0.2744
+Epoch 22 - 112s - train_loss: 0.3128 - train_r: 0.5985 - train_r2: 0.3602 - valid_loss: 0.3281 - valid_r: 0.5641 - valid_r2: 0.3165
+Epoch 23 - 112s - train_loss: 0.3191 - train_r: 0.5879 - train_r2: 0.3476 - valid_loss: 0.3658 - valid_r: 0.5403 - valid_r2: 0.2398
+Epoch 24 - 112s - train_loss: 0.3261 - train_r: 0.5753 - train_r2: 0.3329 - valid_loss: 0.3574 - valid_r: 0.5175 - valid_r2: 0.2572
+Epoch 25 - 102s - train_loss: 0.3673 - train_r: 0.5013 - train_r2: 0.2509 - valid_loss: 0.3924 - valid_r: 0.4665 - valid_r2: 0.1850
+Epoch 26 - 81s - train_loss: 0.3533 - train_r: 0.5271 - train_r2: 0.2794 - valid_loss: 0.3744 - valid_r: 0.5009 - valid_r2: 0.2220
+Epoch 27 - 74s - train_loss: 0.3563 - train_r: 0.5212 - train_r2: 0.2732 - valid_loss: 0.3767 - valid_r: 0.5025 - valid_r2: 0.2169
