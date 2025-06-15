@@ -1,3 +1,5 @@
+## Examples
+```bash
 cd Chromatin2Exp
 chmod +x *.py
 
