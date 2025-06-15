@@ -5,6 +5,8 @@ import os
 import shutil
 import yaml
 import tensorflow as tf
+import numpy as np
+import random
 from paddy import seqnn
 from paddy import dataset
 from paddy import trainer
@@ -56,12 +58,26 @@ def main():
         "--loss_scale",
         action="store_true",
         default=False,
-        help="Use loss scale for training. A little bit slower but more stable. [Default: %(default)s]",
+        help=
+        "Use loss scale for training. A little bit slower but more stable. [Default: %(default)s]",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility [Default: %(default)s]",
     )
     parser.add_argument("data_dirs",
                         nargs="+",
                         help="Train/valid/test data directorie(s)")
     args = parser.parse_args()
+    
+    if args.seed:
+        tf.random.set_seed(args.seed)
+        np.random.seed(args.seed)
+        random.seed(args.seed)
+        os.environ['TF_DETERMINISTIC_OPS'] = '1'
+        tf.config.experimental.enable_op_determinism()
 
     os.makedirs(args.out_dir, exist_ok=True)
     if args.params_file != "%s/params.yaml" % args.out_dir:
@@ -72,6 +88,9 @@ def main():
     params_model = params["model"]
     params_train = params["train"]
     params_model["transpose_input"] = args.transpose_input
+
+    with open(f"{args.out_dir}/seed.txt", "w") as f:
+        f.write(f"Random seed: {args.seed}\n")
 
     train_data = []
     eval_data = []
@@ -87,8 +106,7 @@ def main():
                 mode="train",
                 repeat=True,
                 transpose_input=args.transpose_input,
-            )
-        )
+            ))
 
         eval_data.append(
             dataset.TracksDataset(
@@ -109,14 +127,12 @@ def main():
         # initialize model
         seqnn_model = seqnn.TracksNN(params_model)
 
-        seqnn_trainer = trainer.Trainer(
-            params_train,
-            train_data,
-            eval_data,
-            args.out_dir,
-            args.log_dir,
-            loss_scale=args.loss_scale
-        )
+        seqnn_trainer = trainer.Trainer(params_train,
+                                        train_data,
+                                        eval_data,
+                                        args.out_dir,
+                                        args.log_dir,
+                                        loss_scale=args.loss_scale)
         seqnn_trainer.compile(seqnn_model)
 
         checkpoint_dir = args.out_dir
