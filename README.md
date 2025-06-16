@@ -1,4 +1,5 @@
 ## PADDY
+![paddy](paddy.png)
 PADDY is a deep learning model library focused on biological applications. It provides modular, reusable implementations to accelerate AI-driven biological discoveries.
 ## Install
 ```bash
