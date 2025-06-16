@@ -1,7 +1,7 @@
 ## PADDY
 <table>
   <tr>
-    <td><img src="paddy.png" alt="paddy" width="300"></td>
+    <td><img src="paddy.png" alt="paddy" width="500"></td>
     <td>
       <strong>PADDY</strong> is a deep learning model library focused on biological applications. It provides modular, reusable implementations to accelerate AI-driven biological discoveries.
     </td>
