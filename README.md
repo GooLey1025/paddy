@@ -1,6 +1,13 @@
 ## PADDY
-![paddy](paddy.png)
-PADDY is a deep learning model library focused on biological applications. It provides modular, reusable implementations to accelerate AI-driven biological discoveries.
+<table>
+  <tr>
+    <td><img src="paddy.png" alt="paddy" width="300"></td>
+    <td>
+      <strong>PADDY</strong> is a deep learning model library focused on biological applications. It provides modular, reusable implementations to accelerate AI-driven biological discoveries.
+    </td>
+  </tr>
+</table>
+
 ## Install
 ```bash
 git clone https://github.com/GooLey1025/paddy.git
