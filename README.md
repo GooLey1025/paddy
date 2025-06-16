@@ -1,3 +1,5 @@
+## PADDY
+PADDY is a deep learning model library focused on biological applications. It provides modular, reusable implementations to accelerate AI-driven biological discoveries.
 ## Install
 ```bash
 git clone https://github.com/GooLey1025/paddy.git
@@ -7,5 +9,3 @@ conda create -n paddy python=3.10
 conda activate paddy
 cd paddy
 pip install -e .
-
-
