@@ -1,5 +1,5 @@
 train:
-  batch_size: 64
+  batch_size: 32
   patience: 20
   # agc_clip: 0.1
   num_gpu: 1
@@ -38,10 +38,11 @@ model:
       heads: 8
       key_size: 64 # The size of each key and query embedding per head.
       dropout: 0
+      dense_expansion: 0
       mha_l2_scale: 0 # default 0, 0意味着对权重不使用惩罚项。 
       mha_initializer: "he_normal" # 使用正态分布初始化权重，适合ReLU 激活函数
-      attention_dropout: 0.05
-      position_dropout: 0.05
+      attention_dropout: 0
+      position_dropout: 0
     - block_name: "global_pool"
       pool_type: "attention"
       pool_axis: 1

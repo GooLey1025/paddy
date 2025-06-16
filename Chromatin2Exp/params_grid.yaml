@@ -1,24 +1,15 @@
 train:
-  batch_size: 32, 64
-  patience: 20
+  batch_size: 32
+  patience: 10
   # agc_clip: 0.1
   num_gpu: 1
   train_epochs_max: 100
-  
   loss: "mse" # default poisson. Options: mse; bce; poisson_mn; poisson_kl; mse_udot; poisson。
-  ### below are for poisson_mn loss. ###
-  #spec_weight: 1 # default 1. 较高的值会使模型更关注预测特定位置的准确性而非总体趋势
-  #total_weight: 1 # default 1. 控制模型对总表达量与位置分布的平衡,增大模型更关注总表达量的准确预测，减小模型更关注位置分布的准确预测
-  #weight_range: 1 # default 1. 当 >1 时，中心位置的权重会高于边缘位置。为5时，表示中心位置权重是边缘的5倍。
-  #weight_exp: 1 # default 1. 权重衰减函数的指数，控制从中心到边缘权重下降的陡峭程度。较小的值使权重平缓变化，较大的值使中心高权重区域更集中。
-  
-  ### below are for optimizer. When not using cyclical1, only learning_rate is used.
   optimizer: "adam" # default sgd. Options: adam; adamw; sgd; momentum.
-  learning_rate: 0.0001 # default 0.01.
-  adam_beta1: 0.90 # default 0.9.
+  learning_rate: 0.0001, 0.0005 # default 0.01.
+  adam_beta1: 0.9 # default 0.9.
   adam_beta2: 0.999 # default 0.999.
-  decay_rate: 0.96 # default 0.96.
-
+  decay_rate: 0.98 # default 0.96.
 
 model:
   num_bins: 1024
@@ -31,7 +22,7 @@ model:
   trunk:
     - block_name: "conv_dna"
       filters: 256
-      kernel_size: 15
+      kernel_size: 8, 15, 18, 20
       norm_type: "null"
       activation: "linear"
       pool_size: 2
@@ -39,20 +30,15 @@ model:
       filters_init: 312
       filters_end: 512
       divisible_by: 32
-      kernel_size: 15
+      kernel_size: 15, 10
       num_convs: 1
       pool_size: 2
       repeat: 4
-    # - block_name: "dense_position"
-    #   position_embedding_type: "learnable"
-    #   hidden_dim: 512
-    #   position_dropout: 0.1
-    #   l2_scale: 0.01
-    #   kernel_initializer: "he_normal"
     - block_name: "transformer"
       heads: 8
       key_size: 64 # The size of each key and query embedding per head.
       dropout: 0
+      dense_expansion: 0
       mha_l2_scale: 0 # default 0, 0意味着对权重不使用惩罚项。 
       mha_initializer: "he_normal" # 使用正态分布初始化权重，适合ReLU 激活函数
       attention_dropout: 0
@@ -60,19 +46,10 @@ model:
     - block_name: "global_pool"
       pool_type: "attention"
       pool_axis: 1
-    # - block_name: "Dense"
-    #   units: 768
-    #   activation: "relu"
-    #   kernel_initializer: "he_normal"
-    # - block_name: "Dense"
-    #   units: 312
-    #   activation: "relu"
-    #   kernel_initializer: "he_normal"
-
   head_rice:
     - block_name: "dense_head"
       # hidden_units: 128 # default None. If setting, will add a dense layer with this number of units before the final output layer.
       units: 23 # number of targets
       activation: "softplus"
-  # adapter: "houlsby" 
+
   

@@ -1,0 +1,51 @@
+model:
+  activation: gelu
+  bn_momentum: 0.9
+  head_rice:
+  - activation: softplus
+    block_name: dense_head
+    units: 23
+  kernel_initializer: lecun_normal
+  l2_scale: 2.0e-08
+  norm_type: batch
+  num_bins: 1024
+  num_tracks: 106
+  trunk:
+  - activation: linear
+    block_name: conv_dna
+    filters: 256
+    kernel_size: 8
+    norm_type: 'null'
+    pool_size: 2
+  - block_name: res_tower
+    divisible_by: 32
+    filters_end: 512
+    filters_init: 312
+    kernel_size: 15
+    num_convs: 1
+    pool_size: 2
+    repeat: 4
+  - attention_dropout: 0
+    block_name: transformer
+    dense_expansion: 0
+    dropout: 0
+    heads: 8
+    key_size: 64
+    mha_initializer: he_normal
+    mha_l2_scale: 0
+    position_dropout: 0
+  - block_name: global_pool
+    pool_axis: 1
+    pool_type: attention
+train:
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  batch_size: 32
+  decay_rate: 0.98
+  learning_rate: 0.0001
+  loss: mse
+  num_gpu: 1
+  optimizer: adam
+  patience: 10
+  seed: 1
+  train_epochs_max: 100

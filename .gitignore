@@ -18,6 +18,9 @@ Chromatin2Exp/test1_train_out/
 Chromatin2Exp/new_log_out/
 Chromatin2Exp/test_tissues/
 Chromatin2Exp/best_train_out
+Chromatin2Exp/preds/
+Chromatin2Exp/model_dir/
+
 Seq2Exp/
 Seq2Chromatin/
 .vscode/

@@ -19,10 +19,11 @@ class TracksNN:
       params (dict): Model specification and parameters.
     """
 
-    def __init__(self, params: dict):
+    def __init__(self, params: dict, verbose: bool = True):
         self.set_defaults()
         for key, value in params.items():
             self.__setattr__(key, value)
+        self.verbose = verbose
         self.build_model()
         self.ensemble = None
 

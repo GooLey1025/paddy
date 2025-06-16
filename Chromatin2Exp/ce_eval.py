@@ -17,7 +17,7 @@ from paddy import dataset
 from paddy import seqnn
 from paddy import trainer
 """
-paddy_eval.py
+ce_eval.py
 
 Evaluate the accuracy of a trained model on held-out sequences.
 """
