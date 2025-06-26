@@ -990,6 +990,21 @@ class StochasticReverseComplement(tf.keras.layers.Layer):
         else:
             return seq_1hot, tf.constant(False)
 
+class StochasticReverseTracks(tf.keras.layers.Layer):
+    """Stochastically reverse a sequence of tracks."""
+
+    def __init__(self):
+        super(StochasticReverseTracks, self).__init__()
+
+    def call(self, seq_tracks, training=None):
+        if training:
+            reverse_seq_tracks = tf.reverse(seq_tracks, axis=[1])
+            reverse_bool = tf.random.uniform(shape=[]) > 0.5
+            src_seq_tracks = tf.cond(reverse_bool, lambda: reverse_seq_tracks,
+                                   lambda: seq_tracks)
+            return src_seq_tracks, reverse_bool
+        else:
+            return seq_tracks, tf.constant(False)
 
 class SwitchReverse(tf.keras.layers.Layer):
     """Reverse predictions if the inputs were reverse complemented."""

@@ -14,7 +14,7 @@ chmod +x *.py
     --valid_chrom 11 --test_chrom 12
 
 ### 2.train model
-./ce_train.py -o test_train_out -l test_log_out params.yaml 23tissues --seed 42
+./ce_train.py -o test_train_out -l test_log_out params.yaml 23tissues --seed 300
 
 ## (optional) or try one experiment with timestamp 
 time=$(date +"%Y%m%d_%H%M%S")
@@ -22,8 +22,8 @@ nohup ./ce_train.py  -o train_out/$time -l tensorboard/$time \
     params.yaml 23tissues > logs/$time.log &
 
 ## (optional) hyperparameters experiments
-./ce_train_grid.py -p 1 -t 23tissues -o experiments/grid_search_20250526_night \
-    params_grid.yaml -r -s 1 100 200 300 400
+GRIDS=grid_search_20250624_night
+train_grid.py  -s "./ce_train.py" params_grid.yaml --output_dir experiments/$GRIDS --seeds 1 100 200 300 400 -t 23tissues 
 
 ## (optional) training visualization
 tensorboard --logdir=./test_log_out --host 0.0.0.0 --port 6006
@@ -33,17 +33,20 @@ tensorboard --logdir=./test_log_out --host 0.0.0.0 --port 6006
     -t 23tissues/targets.txt --split test params.yaml \
     test_train_out/model_best.h5 23tissues
 
+
 ### 4. Predict based on best model
 ./ce_predict.py --model_file test_train_out/model_best.h5 --h5_file predict.h5 --params_file params.yaml
-## or if you want to compare different seed's model performance
+## or if you want to compare different model's performance
 rm -rf model_dir
 mkdir -p model_dir
-for d in experiments/grid_search_20250615_night/exp_0_seed_*/train_out; do
+# Prepare models (optional)
+exp=0
+for d in experiments/$GRIDS/exp_${exp}_seed_*/train_out; do
     seed_name=$(basename $(dirname "$d"))   #  exp_0_seed_1
     seed_id=${seed_name##*_}               
     cp "$d/model_best.h5" "model_dir/seed${seed_id}_model_best.h5"
 done
-cp experiments/grid_search_20250615_night/exp_0_seed_1/params.yaml params_pred.yaml
+cp experiments/$GRIDS/exp_${exp}_seed_1/params.yaml params_pred.yaml
+# assign model_dir to --model-file
 ./ce_predict.py --model_file model_dir/ --h5_file predict.h5 --params_file params_pred.yaml
-
 

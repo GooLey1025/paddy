@@ -1,5 +1,7 @@
 model:
-  activation: gelu
+  activation: relu
+  augment_r: true
+  augment_shift: 2
   bn_momentum: 0.9
   head_rice:
   - activation: softplus
@@ -13,17 +15,20 @@ model:
   trunk:
   - activation: linear
     block_name: conv_dna
+    conv_type: maxpooling1d
     filters: 256
-    kernel_size: 8
+    kernel_size: 20
     norm_type: 'null'
     pool_size: 2
+    pool_type: softmax
   - block_name: res_tower
     divisible_by: 32
     filters_end: 512
     filters_init: 312
-    kernel_size: 15
+    kernel_size: 10
     num_convs: 1
     pool_size: 2
+    pool_type: softmax
     repeat: 4
   - attention_dropout: 0
     block_name: transformer
@@ -33,19 +38,27 @@ model:
     key_size: 64
     mha_initializer: he_normal
     mha_l2_scale: 0
+    num_position_features: 1024
     position_dropout: 0
+  - block_name: unet_conv
+    kernel_size: 3
+    upsample_conv: true
+  - block_name: unet_conv
+    kernel_size: 3
+    upsample_conv: true
   - block_name: global_pool
     pool_axis: 1
     pool_type: attention
 train:
   adam_beta1: 0.9
   adam_beta2: 0.999
-  batch_size: 32
+  batch_size: 16
   decay_rate: 0.98
   learning_rate: 0.0001
   loss: mse
   num_gpu: 1
   optimizer: adam
-  patience: 10
+  patience: 20
   seed: 1
   train_epochs_max: 100
+  warmup_steps: 4000

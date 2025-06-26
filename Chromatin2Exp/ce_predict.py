@@ -15,6 +15,7 @@ from natsort import natsorted
 from paddy import seqnn
 import re
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Predict gene expression')
     parser.add_argument(
@@ -52,26 +53,42 @@ def parse_args():
 def get_model_files(model_path):
     """Get list of model files from path."""
     if os.path.isfile(model_path):
-        return False, [model_path]
+        return False, [(0, model_path)]  # Default seed 0 for single file
     elif os.path.isdir(model_path):
         # Look for h5 files in directory
         model_files = glob.glob(os.path.join(model_path, "*.h5"))
         if not model_files:
             raise ValueError(f"No .h5 files found in directory: {model_path}")
-        return True, sorted(model_files)
+
+        # Extract seed numbers from filenames
+        seed_files = []
+        for file in natsorted(model_files):
+            filename = os.path.basename(file)
+            if filename.startswith('seed'):
+                # Extract number after 'seed'
+                try:
+                    seed_num = int(filename[4:].split('_')[0])
+                except ValueError:
+                    print(
+                        f"Warning: Could not parse seed number from {filename}, using default"
+                    )
+                    seed_num = len(seed_files)  # Use index as fallback
+            else:
+                seed_num = len(seed_files)  # Use index as fallback
+            seed_files.append((seed_num, file))
+
+        return True, seed_files
     else:
         raise ValueError(f"Model path does not exist: {model_path}")
 
 
-
-def plot_gene_predictions(gene_id, predictions, output_dir, num_targets):
+def plot_gene_predictions(gene_id, predictions, output_dir):
     """
     Plot prediction values for a gene.
     X-axis: targets (target_1, target_2, ...)
     Y-axis: predicted value
     Different lines = different seeds
     """
-    # 自动识别所有 target IDs 和 seed IDs
     pattern = re.compile(r'target_(\d+)_seed_(\d+)')
     target_seed_map = {}
 
@@ -81,43 +98,39 @@ def plot_gene_predictions(gene_id, predictions, output_dir, num_targets):
             target_id, seed_id = match.groups()
             target_id = int(target_id)
             seed_id = int(seed_id)
-            target_seed_map.setdefault(seed_id, {})[target_id] = predictions[key]
+            target_seed_map.setdefault(seed_id,
+                                       {})[target_id] = predictions[key]
 
-    target_ids = sorted(set(t for seed in target_seed_map.values() for t in seed))
-    seed_ids = sorted(target_seed_map.keys())
+    target_ids = natsorted(
+        set(t for seed in target_seed_map.values() for t in seed))
+    seed_ids = natsorted(target_seed_map.keys())
 
     x_labels = [f'target_{i}' for i in target_ids]
     x_indices = np.arange(len(x_labels))
 
-    plt.figure(figsize=(14, 6))
+    plt.figure(figsize=(12, 6))
     sns.set_style("whitegrid")
     sns.set_palette("tab10", len(seed_ids))
 
     for seed_idx in seed_ids:
         y_vals = [target_seed_map[seed_idx].get(t, np.nan) for t in target_ids]
-        plt.plot(
-            x_indices,
-            y_vals,
-            marker='o',
-            label=f'Seed {seed_idx}',
-            linewidth=2,
-            alpha=0.8
-        )
+        plt.plot(x_indices,
+                 y_vals,
+                 marker='o',
+                 label=f'Seed {seed_idx}',
+                 linewidth=2,
+                 alpha=0.8)
 
-    # 可选：添加 mean ± std 区间
     for i, t in enumerate(target_ids):
         mean_key = f'target_{t}_mean'
         std_key = f'target_{t}_std'
         if mean_key in predictions and std_key in predictions:
             mean_val = predictions[mean_key]
             std_val = predictions[std_key]
-            plt.fill_between(
-                [i - 0.1, i + 0.1],
-                [mean_val - std_val] * 2,
-                [mean_val + std_val] * 2,
-                color='gray',
-                alpha=0.15
-            )
+            plt.fill_between([i - 0.1, i + 0.1], [mean_val - std_val] * 2,
+                             [mean_val + std_val] * 2,
+                             color='gray',
+                             alpha=0.15)
 
     plt.xticks(ticks=x_indices, labels=x_labels, rotation=45, ha='right')
     plt.ylabel("Predicted Expression")
@@ -131,10 +144,10 @@ def plot_gene_predictions(gene_id, predictions, output_dir, num_targets):
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
 
+
 def main():
     args = parse_args()
 
-    # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
     with open(args.params_file) as params_open:
@@ -163,9 +176,9 @@ def main():
             all_predictions[chrom[i]] = {'geneID': chrom[i]}
 
         # Run predictions for each model
-        for model_idx, model_file in enumerate(model_files):
+        for model_idx, (seed_num, model_file) in enumerate(model_files):
             print(
-                f"\nLoading model {model_idx + 1}/{len(model_files)}: {os.path.basename(model_file)}"
+                f"\nLoading model {model_idx + 1}/{len(model_files)} (seed {seed_num}): {os.path.basename(model_file)}"
             )
             seqnn_model = seqnn.TracksNN(params["model"], verbose=False)
             seqnn_model.restore(model_file, args.head_i)
@@ -190,7 +203,7 @@ def main():
                             # Multi-tissue prediction
                             feature_count = pred.shape[0]
                             for k in range(feature_count):
-                                col_name = f'target_{k+1}_seed_{model_idx+1}'
+                                col_name = f'target_{k+1}_seed_{seed_num}'
                                 all_predictions[gene_id][col_name] = pred[k]
                         elif len(pred.shape) > 1:
                             raise ValueError(
@@ -198,7 +211,7 @@ def main():
                             )
                     else:
                         # Single value prediction
-                        col_name = f'expression_0_seed_{model_idx+1}'
+                        col_name = f'expression_0_seed_{seed_num}'
                         all_predictions[gene_id][col_name] = float(pred)
 
             # Clear model to free memory
@@ -231,17 +244,15 @@ def main():
         # Generate plots for each gene
         print("\nGenerating prediction plots...")
         if seed_model_bool:
-            # get number of targets from first gene
-            num_targets = len(all_predictions[list(all_predictions.keys())[0]]) - 1 # -1 for geneID
             for gene_id in tqdm(all_predictions):
                 plot_gene_predictions(gene_id, all_predictions[gene_id],
-                                  args.output_dir, num_targets)
+                                      args.output_dir)
 
     # Convert to DataFrame and save
     print(
         f"\nSaving results to {os.path.join(args.output_dir, 'predictions.tsv')}"
     )
-    
+
     df = pd.DataFrame(list(all_predictions.values()))
 
     # Reorder columns: geneID, mean/std columns, individual seed columns
@@ -257,7 +268,10 @@ def main():
     df = df[column_order]
 
     if not seed_model_bool:
-        mean_cols = [col for col in df.columns if col.startswith("target_") and col.endswith("_mean")]
+        mean_cols = [
+            col for col in df.columns
+            if col.startswith("target_") and col.endswith("_mean")
+        ]
         rename_dict = {col: col.replace("_mean", "") for col in mean_cols}
         df = df[["geneID"] + mean_cols].rename(columns=rename_dict)
 

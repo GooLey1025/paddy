@@ -50,6 +50,9 @@ def parse_loss(
         elif loss_label == "mse_udot":
             loss_fn = metrics.MeanSquaredErrorUDot(
                 spec_weight, reduction=tf.keras.losses.Reduction.NONE)
+        elif loss_label == "mse_plus_pearsonr":
+            loss_fn = metrics.MSEPlusPearsonLoss(
+                reduction=tf.keras.losses.Reduction.NONE)
         else:
             loss_fn = tf.keras.losses.Poisson(
                 reduction=tf.keras.losses.Reduction.NONE)
@@ -62,6 +65,8 @@ def parse_loss(
             loss_fn = tf.keras.losses.BinaryCrossentropy()
         elif loss_label == "poisson_kl":
             loss_fn = metrics.PoissonKL(spec_weight)
+        elif loss_label == "mse_plus_pearsonr":
+            loss_fn = metrics.MSEPlusPearsonLoss()
         elif loss_label == "poisson_mn":
             loss_fn = metrics.PoissonMultinomial(
                 total_weight=total_weight,
@@ -1102,7 +1107,10 @@ class Cyclical1LearningRate(tf.keras.optimizers.schedules.LearningRateSchedule
             maximal_learning_rate = tf.cast(self.maximal_learning_rate, dtype)
             final_learning_rate = tf.cast(self.final_learning_rate, dtype)
 
-            step_size = tf.cast(self.step_size, dtype)
+            # Convert step and step_size to float32 before calculations
+            step = tf.cast(step, tf.float32)
+            step_size = tf.cast(self.step_size, tf.float32)
+
             cycle = tf.floor(1 + step / (2 * step_size))
             x = tf.abs(step / step_size - 2 * cycle + 1)
 

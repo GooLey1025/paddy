@@ -33,8 +33,9 @@ class TracksNN:
         Only necessary for my bespoke parameters.
         Others are best defaulted closer to the source.
         """
-        self.augment_rc = False
+        self.augment_r = False
         self.augment_shift = [0]
+        print(f"augment_shift: {self.augment_shift}")
         self.strand_pair = []
         self.verbose = True
         self.transpose_input = False
@@ -127,7 +128,15 @@ class TracksNN:
             # Transposed shape: [batch, num_tracks, num_bins]
             tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
                                     name="tracks")
+        
         current = tracks
+
+        # augmentation
+        if self.augment_r:
+            current, reverse_bool = layers.StochasticReverseTracks()(current)
+        if self.augment_shift != [0]:
+            current = layers.StochasticShift(self.augment_shift)(current)
+
 
         self.preds_triu = False
 

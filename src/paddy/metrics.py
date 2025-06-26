@@ -521,3 +521,23 @@ class R2(tf.keras.metrics.Metric):
     def reset_state(self):
         """Reset metric state."""
         K.batch_set_value([(v, np.zeros(self._shape)) for v in self.variables])
+
+
+class MSEPlusPearsonLoss(tf.keras.losses.Loss):
+    def __init__(self, alpha=0.1, reduction=tf.keras.losses.Reduction.AUTO):
+        super().__init__()
+        self.alpha = alpha
+        self.reduction = reduction
+        self.mse = tf.keras.losses.MeanSquaredError(reduction=reduction)
+
+    def call(self, y_true, y_pred):
+        mse_loss = self.mse(y_true, y_pred)
+
+        x = y_pred - tf.reduce_mean(y_pred, axis=-1, keepdims=True)
+        y = y_true - tf.reduce_mean(y_true, axis=-1, keepdims=True)
+        r_num = tf.reduce_sum(x * y, axis=-1)
+        r_den = tf.sqrt(tf.reduce_sum(x ** 2, axis=-1)) * tf.sqrt(tf.reduce_sum(y ** 2, axis=-1))
+        r = r_num / (r_den + 1e-6)
+        pearson_loss = 1 - r
+
+        return mse_loss + self.alpha * pearson_loss

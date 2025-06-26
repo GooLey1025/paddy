@@ -71,13 +71,6 @@ def main():
                         nargs="+",
                         help="Train/valid/test data directorie(s)")
     args = parser.parse_args()
-    
-    if args.seed:
-        tf.random.set_seed(args.seed)
-        np.random.seed(args.seed)
-        random.seed(args.seed)
-        os.environ['TF_DETERMINISTIC_OPS'] = '1'
-        tf.config.experimental.enable_op_determinism()
 
     os.makedirs(args.out_dir, exist_ok=True)
     if args.params_file != "%s/params.yaml" % args.out_dir:
@@ -88,6 +81,15 @@ def main():
     params_model = params["model"]
     params_train = params["train"]
     params_model["transpose_input"] = args.transpose_input
+
+    # priortize args.seed over params_train.seed
+    seed = args.seed or params_train.get("seed", None)
+    if seed:
+        tf.random.set_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        os.environ['TF_DETERMINISTIC_OPS'] = '1'
+        tf.config.experimental.enable_op_determinism()
 
     with open(f"{args.out_dir}/seed.txt", "w") as f:
         f.write(f"Random seed: {args.seed}\n")
