@@ -13,7 +13,16 @@ def main():
     parser.add_argument("--seeds", type=int, nargs='+', default=[42], help="List of seeds to use")
     parser.add_argument("--restart", action="store_true", help="Restart from previous run, default is False")
     parser.add_argument("-t","--tissue_type", type=str, default=None, help="Tissue type parameter passed to training")
+    parser.add_argument("-p","--parallel_jobs", type=int, default=1, help="Number of parallel jobs to run")
+    parser.add_argument("--gpus", type=str, default=None, 
+                      help="Comma-separated list of GPU IDs to use (e.g., '0,1,2'). If not specified, all available GPUs will be used.")
     args = parser.parse_args()
+
+    # Set CUDA_VISIBLE_DEVICES if specified
+    if args.gpus:
+        import os
+        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
+        print(f" Using GPUs: {args.gpus}")
 
     runner = grid.GridSearchRunner(
         base_params_file=args.params_file,
@@ -22,7 +31,8 @@ def main():
         tissue_type=args.tissue_type,
         restart=args.restart,
         script_path=args.script_path,
-        advanced_args=args.advanced_args
+        advanced_args=args.advanced_args,
+        parallel_jobs=args.parallel_jobs
     )
 
     runner.prepare_experiments()
@@ -35,6 +45,10 @@ def main():
     print(f" Total experiment combinations (with seeds): {total}")
     print(f" Previously completed: {done}")
     print(f" Remaining to run: {pending}\n")
+    
+    if args.parallel_jobs > 1:
+        print(f" Running with {args.parallel_jobs} parallel processes")
+    
     runner.run()
 
     print(f"\n All {total} experiments complete. {pending} this time running.")

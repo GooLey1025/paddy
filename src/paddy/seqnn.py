@@ -51,7 +51,7 @@ class TracksNN:
         """
         block_args = {}
 
-        block_name = block_params["block_name"]
+        block_name = block_params["name"]
 
         # save upper_tri flatten
         self.preds_triu |= block_name == "upper_tri"
@@ -81,7 +81,7 @@ class TracksNN:
 
         # set remaining params
         block_args.update(block_params)
-        del block_args["block_name"]
+        del block_args["name"]
 
         # save representations
         if block_name.find("tower") != -1:
@@ -1044,7 +1044,7 @@ class SeqNN:
         block_args = {}
 
         # extract name
-        block_name = block_params["block_name"]
+        block_name = block_params["name"]
 
         # save upper_tri flatten
         self.preds_triu |= block_name == "upper_tri"
@@ -1074,7 +1074,7 @@ class SeqNN:
 
         # set remaining params
         block_args.update(block_params)
-        del block_args["block_name"]
+        del block_args["name"]
 
         # save representations
         if block_name.find("tower") != -1:
@@ -1113,7 +1113,7 @@ class SeqNN:
 
         ###################################################
         # inputs
-        sequence = tf.keras.Input(shape=(self.seq_length, 4), name="sequence")
+        sequence = tf.keras.Input(shape=(self.seq_length, self.seq_depth), name="sequence")
         current = sequence
 
         # augmentation
@@ -1167,7 +1167,8 @@ class SeqNN:
                         [current, reverse_bool]
                     )
                 else:
-                    current = layers.SwitchReverse(strand_pair)([current, reverse_bool])
+                    if self.model_type == "2d_to_2d":
+                        current = layers.SwitchReverse(strand_pair)([current, reverse_bool])
 
             # save head output
             self.head_output.append(current)
@@ -1188,8 +1189,8 @@ class SeqNN:
         if self.verbose:
             print(self.model.summary())
 
-        # track pooling/striding and cropping
-        self.track_sequence(sequence)
+        # track pooling/striding and cropping     
+        # self.track_sequence(sequence)
 
     def build_embed(self, conv_layer_i: int, batch_norm: bool = True):
         """Build model to embed sequences into specific layer."""
@@ -1853,7 +1854,7 @@ class SeqNN:
     def restore(self, model_file, head_i=0, trunk=False):
         """Restore weights from saved model."""
         if trunk:
-            self.model_trunk.load_weights(model_file)
+            self.model_trunk.load_weights(model_file, by_name=True, skip_mismatch=True)
         else:
             self.models[head_i].load_weights(model_file)
             self.model = self.models[head_i]

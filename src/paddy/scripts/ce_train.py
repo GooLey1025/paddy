@@ -3,12 +3,14 @@
 import argparse
 import os
 import shutil
+import random
+
 import yaml
 import tensorflow as tf
 import numpy as np
-import random
-from paddy import seqnn
-from paddy import dataset
+
+from paddy import seqnn # type: ignore
+from paddy import dataset # type: ignore
 from paddy import trainer
 from paddy import dataset
 
@@ -48,11 +50,11 @@ def main():
         "Transpose input features from [num_bins, num_tracks] to [num_tracks, num_bins] [Default: %(default)s]",
     )
     parser.add_argument(
-        "--restore",
+        "--resume",
         action="store_true",
         default=False,
         help=
-        "Restore model from checkpoint in args.out_dir (if not specified, will start training from scratch) [Default: %(default)s]",
+        "Resume training from checkpoint in args.out_dir (if not specified, will start training from scratch) [Default: %(default)s]",
     )
     parser.add_argument(
         "--loss_scale",
@@ -126,7 +128,7 @@ def main():
         ########################################
         # one GPU
 
-        # initialize model
+        # initialize modela
         seqnn_model = seqnn.TracksNN(params_model)
 
         seqnn_trainer = trainer.Trainer(params_train,
@@ -137,18 +139,31 @@ def main():
                                         loss_scale=args.loss_scale)
         seqnn_trainer.compile(seqnn_model)
 
-        checkpoint_dir = args.out_dir
-
     else:
-        ########################################
-        # multi GPU
-        print("Multi GPU training not implemented yet.")
-        exit()
+        strategy = tf.distribute.MirroredStrategy()
+        with strategy.scope():
+            # distribute data
+            for di in range(len(args.data_dirs)):
+                train_data[di].distribute(strategy)
+                eval_data[di].distribute(strategy)
+
+            seqnn_model = seqnn.TracksNN(params_model)
+
+            seqnn_trainer = trainer.Trainer(params_train,
+                                            train_data,
+                                            eval_data,
+                                            args.out_dir,
+                                            args.log_dir,
+                                            strategy=strategy,
+                                            num_gpu=params_train["num_gpu"],
+                                            keras_fit=False,
+                                            loss_scale=args.loss_scale)
+            seqnn_trainer.compile(seqnn_model)
 
     # train model
 
     if len(args.data_dirs) == 1:
-        seqnn_trainer.fit_tape(seqnn_model, restore=args.restore)
+        seqnn_trainer.fit_tape(seqnn_model, resume=args.resume)
     else:
         print("fit2 not implemented yet.")
         exit()

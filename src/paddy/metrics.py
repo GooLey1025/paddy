@@ -115,6 +115,30 @@ def poisson_multinomial(
         epsilon (float): Added small value to avoid log(0).
         rescale (bool): Rescale loss after re-weighting.
     """
+    # 检查输入形状，支持2d_to_1d模型类型
+    if len(y_true.shape) == 2:  # 2d_to_1d模型类型 [batch, targets]
+        # 对于2d_to_1d模型，直接使用poisson损失
+        poisson_term = poisson(y_true, y_pred)  # B x T
+        
+        # 添加epsilon以避免log(0)
+        y_true_safe = y_true + epsilon
+        y_pred_safe = y_pred + epsilon
+        
+        # 计算KL散度作为替代的multinomial项
+        kl_term = y_true_safe * (tf.math.log(y_true_safe) - tf.math.log(y_pred_safe))
+        kl_term = tf.reduce_mean(kl_term, axis=-1, keepdims=True)  # B x 1
+        
+        # 组合损失
+        loss_raw = poisson_term + total_weight * kl_term  # B x T
+        
+        if rescale:
+            loss_rescale = loss_raw * 2 / (1 + total_weight)
+        else:
+            loss_rescale = loss_raw
+        
+        return loss_rescale
+    
+    # 原始的2d_to_2d实现
     seq_len = y_true.shape[1]
 
     if weight_range < 1:

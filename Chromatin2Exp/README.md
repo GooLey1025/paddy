@@ -22,8 +22,8 @@ nohup ./ce_train.py  -o train_out/$time -l tensorboard/$time \
     params.yaml 23tissues > logs/$time.log &
 
 ## (optional) hyperparameters experiments
-GRIDS=grid_search_20250624_night
-train_grid.py  -s "./ce_train.py" params_grid.yaml --output_dir experiments/$GRIDS --seeds 1 100 200 300 400 -t 23tissues 
+GRIDS=grid_search_20250626_night
+train_grid.py  -s "./ce_train.py" -a " -o {output_dir} -l {log_dir} params_grid.yaml -t 23tissues" --output_dir experiments/$GRIDS --seeds 1 100 200 300 400  -p 1 
 
 ## (optional) training visualization
 tensorboard --logdir=./test_log_out --host 0.0.0.0 --port 6006
@@ -40,7 +40,7 @@ tensorboard --logdir=./test_log_out --host 0.0.0.0 --port 6006
 rm -rf model_dir
 mkdir -p model_dir
 # Prepare models (optional)
-exp=0
+exp=5
 for d in experiments/$GRIDS/exp_${exp}_seed_*/train_out; do
     seed_name=$(basename $(dirname "$d"))   #  exp_0_seed_1
     seed_id=${seed_name##*_}               

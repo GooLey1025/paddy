@@ -6,10 +6,12 @@ src/paddy/bed.py
 src/paddy/blocks.py
 src/paddy/dataset.py
 src/paddy/dna.py
+src/paddy/grid.py
 src/paddy/layers.py
 src/paddy/metrics.py
 src/paddy/seqnn.py
 src/paddy/trainer.py
+src/paddy/utils.py
 src/paddy.egg-info/PKG-INFO
 src/paddy.egg-info/SOURCES.txt
 src/paddy.egg-info/dependency_links.txt
@@ -18,8 +20,4 @@ src/paddy.egg-info/requires.txt
 src/paddy.egg-info/top_level.txt
 src/paddy/helpers/extract_label.py
 src/paddy/helpers/gcs_utils.py
-src/paddy/scripts/paddy_data.py
-src/paddy/scripts/paddy_eval.py
-src/paddy/scripts/paddy_gs_data.py
-src/paddy/scripts/paddy_train.py
-src/paddy/scripts/paddy_train_grid.py
+src/paddy/scripts/train_grid.py

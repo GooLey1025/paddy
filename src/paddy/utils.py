@@ -5,6 +5,46 @@ import re
 import yaml
 import subprocess
 import sys
+import argparse
+
+def set_gpu_device(gpu_id=None):
+    """
+    Set the GPU device(s) to be used before importing TensorFlow.
+    
+    This function should be called before importing TensorFlow to ensure
+    that TensorFlow only allocates memory on the specified GPU(s).
+    
+    Args:
+        gpu_id (str, optional): Comma-separated list of GPU indices to use.
+            If None, will try to parse from command line arguments.
+            Defaults to None.
+            
+    Returns:
+        str: The GPU indices being used.
+    
+    Example:
+        # Option 1: Call directly with GPU ID
+        set_gpu_device("0,1")
+        import tensorflow as tf
+        
+        # Option 2: Parse from command line
+        set_gpu_device()  # Will look for -g or --gpu in sys.argv
+        import tensorflow as tf
+    """
+    if gpu_id is None:
+        # Try to parse GPU ID from command line arguments
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("-g", "--gpu", "--visible_device", default="0")
+        
+        # Parse only known args to avoid conflicts with other argument parsers
+        args, _ = parser.parse_known_args()
+        gpu_id = args.gpu
+    
+    # Set CUDA_VISIBLE_DEVICES environment variable
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+    print(f"Using GPU(s): {gpu_id}")
+    
+    return gpu_id
 
 def parse_comma_separated_values(param_grid):
     parsed_grid = {}
@@ -105,7 +145,7 @@ def run_training(params_file,
     log_file = f"{os.path.dirname(params_file)}/training_output.log"
     print(f"Log file: {log_file}")
     redirect = f" > {log_file} 2>&1" if log_output else ""
-    cmd = f"{script_path} {advanced_args} -o {output_dir} -l {log_dir}"
+    cmd = f"{script_path} {advanced_args}"
     print(f"cmd: {cmd}")
     cmd += f" {params_file} {tissue_type} {redirect}"
     process = subprocess.run(cmd, shell=True)

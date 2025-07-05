@@ -16,7 +16,7 @@ for device in gpu_devices:
 
 def file_to_records(filename: str) -> tf.data.Dataset:
     """Read TFRecord file into tf.data.Dataset."""
-    return tf.data.TFRecordDataset(filename)
+    return tf.data.TFRecordDataset(filename, compression_type="ZLIB")
 
 
 class TracksDataset:
@@ -266,6 +266,7 @@ class SeqDataset:
         mode: str = "eval",
         tfr_pattern: str = None,
         targets_slice_file: str = None,
+        data_type: str = "2d_to_2d",
     ):
         self.data_dir = data_dir
         self.split_label = split_label
@@ -274,6 +275,7 @@ class SeqDataset:
         self.seq_length_crop = seq_length_crop
         self.mode = mode
         self.tfr_pattern = tfr_pattern
+        self.data_type = data_type
 
         # read data parameters
         data_stats_file = f"{self.data_dir}/statistics.yaml"
@@ -285,13 +287,13 @@ class SeqDataset:
         self.seq_depth = data_stats.get("seq_depth", 4)
         self.seq_1hot = data_stats.get("seq_1hot", False)
         self.num_targets = data_stats["num_targets"]
+        
 
-        try:
-            self.target_length = data_stats["target_length"]
+        try: # if do not include, model_type is 2d_to_1d
             self.pool_width = data_stats["pool_width"]
-            data_type = "2d_to_2d"
+            self.target_length = data_stats["target_length"]
         except KeyError:
-            data_type = "2d_to_1d"
+            # self.data_type = "2d_to_1d"
             pass
 
         # slice targets

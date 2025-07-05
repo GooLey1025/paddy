@@ -644,12 +644,12 @@ class Trainer:
                     valid_r[di].reset_states()
                     valid_r2[di].reset_states()
 
-    def fit_tape(self, seqnn_model, restore=False):
+    def fit_tape(self, seqnn_model, resume=False):
         """Train the model using a custom tf.GradientTape loop.
         
         Args:
             seqnn_model: Model to train
-            restore: Whether to restore from checkpoint
+            resume: Whether to resume training from checkpoint
         """
         if not self.compiled:
             self.compile(seqnn_model)
@@ -760,7 +760,7 @@ class Trainer:
         manager = tf.train.CheckpointManager(ckpt, self.out_dir, max_to_keep=5)
 
         # Only restore if explicitly requested
-        if restore and manager.latest_checkpoint:
+        if resume and manager.latest_checkpoint:
             ckpt.restore(manager.latest_checkpoint)
             ckpt_end = 5 + manager.latest_checkpoint.find("ckpt-")
             epoch_start = int(manager.latest_checkpoint[ckpt_end:])
@@ -771,11 +771,11 @@ class Trainer:
             print("Checkpoint restored at epoch %d, optimizer iteration %d." %
                   (epoch_start, opt_iters))
         else:
-            if restore and not manager.latest_checkpoint:
+            if resume and not manager.latest_checkpoint:
                 print("No checkpoints found. Starting from scratch.")
-            elif not restore and manager.latest_checkpoint:
+            elif not resume and manager.latest_checkpoint:
                 print(
-                    "Found checkpoints but --restore not specified. Starting from scratch."
+                    "Found checkpoints but --resume not specified. Starting from scratch."
                 )
             else:
                 print("Starting new training run.")
