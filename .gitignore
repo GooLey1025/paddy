@@ -20,7 +20,10 @@ Chromatin2Exp/test_tissues/
 Chromatin2Exp/best_train_out
 Chromatin2Exp/preds/
 Chromatin2Exp/model_dir/
-
+*.log
+*_out
+*best_model_dir
+*se_eval_exps*
 Seq2Exp/
 Seq2Chromatin/
 .vscode/

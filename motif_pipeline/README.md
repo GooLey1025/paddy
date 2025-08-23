@@ -1,8 +1,71 @@
 ## Pipeline
 ```sh
-grads_dir=5tissues_atg_grads
-TISSUE_INDICES="0,1,14,18,20" # This 
+export grads_dir=5tissues_atg_fw_grads
+export TISSUE_INDICES="0,1,14,18,20" # This 
 select_top_gene.py P8_ATG_UD16K.exp --tissue_indices $TISSUE_INDICES -o diff_expr
+
+IFS=',' read -ra INDICES <<< $TISSUE_INDICES
+for i in ${INDICES[@]}; do
+    awk 'NR==FNR && FNR>1 {ids[$2]; next} ($2 in ids) {print ">"$1"|"$2"|"$3"|"$5; print $6}' diff_expr/tissue_${i}_top_genes.tsv P8_ATG_UD16K.seq2exp > diff_expr/tissue_${i}_top_genes.fa
+done
+
+mkdir -p $grads_dir
+IFS=',' read -ra INDICES <<< $TISSUE_INDICES
+for i in ${INDICES[@]}; do
+    paddy_grad_fa.py \
+    --model_path ../seq2exp/best_model_dirs/34P_23tracks_34P_TrunkFrozen_PaddyHead_best_model_dir/seed100_model_best.h5 \
+    ../seq2exp/transfer_CE_PaddyHead.yaml \
+    -o $grads_dir/tissue_${i}.h5 \
+    diff_expr/tissue_${i}_top_genes.fa
+done
+
+preprocess_for_modisco.py \
+    --grad_dir $grads_dir \
+    --tissue_indices $TISSUE_INDICES \
+    -o ${grads_dir} \
+    --out_format npy \
+    --center_size 32768 \
+    --residual \
+    --gaussian_sigma 1280 \
+    --gaussian_truncate 2.0 \
+    --split_by_tissues
+
+mkdir -p modiscolite_${grads_dir}_results
+parallel -j 5 --bar --halt now,fail=1 \
+    modisco motifs \
+        -i ${grads_dir}/modisco_preprocessed_tissue_{}.h5 \
+        -o modiscolite_${grads_dir}/modiscolite_tissue_{}.h5 \
+        -w 400 -n 40000 -t 24 -g 8 -z 18 -f 8 -v \
+    ::: ${TISSUE_INDICES//,/ }
+
+for i in $(echo $TISSUE_INDICES | tr ',' ' '); do
+    modisco motifs \
+        -i ${grads_dir}/modisco_preprocessed_tissue_${i}.h5 \
+        -o modiscolite_${grads_dir}/modiscolite_tissue_${i}.h5 \
+        -w 6000 -n 40000 -t 24 -g 8 -z 18 -f 8 -v
+done
+
+# tfmodisco do not support paralleling, here we submit tasks to HPC server.
+#sbatch tfmodisco.slurm tfm_$grads_dir
+
+# modisco CLI is from tfmodisco-lite
+# printf "%s\n" ${TISSUE_INDICES//,/ } \
+# # | parallel -j 5 --bar --halt now,fail=1 '
+# #     modisco convert -i tfm_$grads_dir/tissue_{}.h5 -o tfm_$grads_dir/tissue_{}.lite.h5 
+# #     modisco meme -i tfm_$grads_dir/tissue_{}.lite.h5 \
+# #         -t PFM -o tfm_{grads_dir}/tissues_{}.meme
+# #     trim_meme_ic.py tfm_${grads_dir}/tissues_{}.meme \
+# #         tfm_${grads_dir}/tissues_{}.trimmed.meme \
+# #         --ic-thresh 0.1 
+# #     tomtom -oc tfm_${grads_dir}/tissue_{} -evalue \
+# #         tfm_${grads_dir}/tissues_{}.trimmed.meme \
+# #         JASPAR2024_CORE_plants_non-redundant_pfms_meme.txt  
+# #     '
+
+motif_analysis.py
+```
+## Old
+```sh
 # extract GFF files for specific tissues
 make_top_genes_gff.py --tissue_indices "$TISSUE_INDICES" \
     --data_dir diff_expr \
@@ -20,35 +83,6 @@ for i in ${INDICES[@]}; do
     -o $grads_dir/tissue_${i}.h5 \
     selected_genes_gff/tissue_${i}_top_genes.gff3
 done
-# --rc --untransform_old --track_scale 0.01 --track_transform 0.75 --clip_soft 384.0
-
-# select specify
-mkdir -p modisco_${grads_dir}_preprocessed 
-preprocess_for_modisco.py \
-    --grad_dir $grads_dir \
-    --tissue_indices $TISSUE_INDICES \
-    -o modisco_${grads_dir}_preprocessed \
-    --residual \
-    --gaussian_sigma 1280 \
-    --gaussian_truncate 2.0
-
-modisco motifs \
-        -i modisco_${grads_dir}_preprocessed/modisco_preprocessed_all.h5 \
-        -o modisco_${grads_dir}_results/modisco_tissues.h5 \
-        -n 40000 -t 24 -g 8 -z 18 -f 8 -w 32768 -v 
-
-modisco meme -i modisco_${grads_dir}_results/modisco_tissues.h5 \
-    -t PFM -o modisco_${grads_dir}_results/tissues_motifs.meme
-trim_meme_ic.py modisco_${grads_dir}_results/tissues_motifs.meme \
-    modisco_${grads_dir}_results/tissues_motifs_ic_trimmed.meme \
-    --ic-thresh 0.1   
-
-mkdir -p tomtom_${grads_dir}_results
-tomtom -oc tomtom_${grads_dir}_results/tissues -evalue \
-    modisco_${grads_dir}_results/tissues_motifs_ic_trimmed.meme \
-    JASPAR2024_CORE_plants_non-redundant_pfms_meme.txt
-
-modisco_analysis.py 
 ```
 
 ## Old version
@@ -74,6 +108,8 @@ for tissue in "${INDICES[@]}"; do
         modisco_${grads_dir}_results/tissue_${tissue}_motifs_ic_trimed.meme \
         --ic-thresh 0.1
 done
+
+
 ```
 ```sh
 

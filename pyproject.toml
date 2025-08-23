@@ -25,7 +25,9 @@ dependencies = [
     "matplotlib",  
     "tensorboard",  
     "scikit-learn",
-    "openpyxl",  
+    "openpyxl",
+    "umap-learn",
+    "seaborn",
 ]
 
 [project.optional-dependencies]
