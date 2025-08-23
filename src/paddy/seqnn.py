@@ -12,784 +12,320 @@ from paddy import layers
 from paddy import metrics
 
 
-class TracksNN:
-    """Tracks neural network model.
-
+class SlopeNN:
+    """SlopeNN model for predicting expression slope from reference and alternate sequences.
+    
+    This model uses a pretrained trunk to extract embeddings from ref/alt sequences,
+    then combines them using different methods (concat/divide/subtract) to predict slope.
+    
+    Workflow:
+    1. Load pretrained trunk architecture and weights
+    2. Extract embeddings from ref and alt sequences
+    3. Combine embeddings using specified method
+    4. Pass through prediction head to get slope
+    
     Args:
       params (dict): Model specification and parameters.
     """
-
-    def __init__(self, params: dict, verbose: bool = True):
+    
+    def __init__(self, params: dict):
+        """Initialize SlopeNN model."""
         self.set_defaults()
         for key, value in params.items():
-            self.__setattr__(key, value)
-        self.verbose = verbose
-        self.build_model()
+            setattr(self, key, value)
+        self._build_complete_model()
         self.ensemble = None
 
     def set_defaults(self):
-        """Set default parameters.
-
-        Only necessary for my bespoke parameters.
-        Others are best defaulted closer to the source.
-        """
-        self.augment_r = False
+        """Set default parameters."""
+        self.augment_rc = False
         self.augment_shift = [0]
-        print(f"augment_shift: {self.augment_shift}")
         self.strand_pair = []
         self.verbose = True
-        self.transpose_input = False
+        self.seq_depth = 4
+        self.trunk_trainable = False
+        self.preds_triu = False  # Initialize preds_triu here
+        
 
-    def build_block(self, current, block_params):
-        """Construct a SeqNN block.
+        self.save_reprs = True
 
-        Args:
-          current: Current Tensor.
-          block_params (dict): Block parameters.
-        Returns:
-          current: New current Tensor.
-        """
+    def _build_complete_model(self):
+        """Build the complete SlopeNN model"""
+        # Step 1: Build trunk model first
+        self._build_trunk_model()
+        
+        # Step 2: Create inputs for the complete model  
+        ref_input = tf.keras.layers.Input(shape=(self.seq_length, self.seq_depth), name='ref_sequence')
+        alt_input = tf.keras.layers.Input(shape=(self.seq_length, self.seq_depth), name='alt_sequence')
+
+        # Step 3: Extract embeddings using the trunk model
+        ref_embedding = self.model_trunk(ref_input)
+        alt_embedding = self.model_trunk(alt_input) 
+        
+        # Step 4: Combine embeddings
+        combined_embedding = self._combine_embeddings(ref_embedding, alt_embedding)
+        
+        # Step 5: Predict slope through head
+        slope_prediction = self._predict_slope(combined_embedding)
+
+        # Step 6: Create final model
+        self.model = tf.keras.Model(
+            inputs=[ref_input, alt_input],
+            outputs=slope_prediction,
+            name='slope_model'
+        )
+        self.models = [self.model]
+        if self.verbose:
+            print("=== SlopeNN Model Summary ===")
+            self.model.summary()
+            print(f"Trunk output shape: {self.trunk_output_shape}")
+            print(f"Combination method: {self.finetune_method}")
+
+
+    def _build_trunk_model(self):
+        """Build standalone trunk model like SeqNN."""
+        sequence_input = tf.keras.layers.Input(
+            shape=(self.seq_length, self.seq_depth), 
+            name="sequence"
+        )
+        
+        trunk_output = self._extract_embedding(sequence_input, name_prefix="trunk")
+        
+        self.model_trunk = tf.keras.Model(
+            inputs=sequence_input,
+            outputs=trunk_output,
+            name='model_trunk'
+        )
+        
+        # Store output shape for head building
+        self.trunk_output_shape = trunk_output.shape[1:]
+        
+        
+        return self.model_trunk
+    
+    def _extract_embedding(self, sequence_input, name_prefix=""):
+        """Extract embedding from sequence using pretrained trunk architecture."""
+        current = sequence_input
+        
+        # Apply data augmentation
+        if self.augment_rc:
+            current, _ = layers.StochasticReverseComplement()(current)
+        if self.augment_shift != [0]:
+            current = layers.StochasticShift(self.augment_shift)(current)
+        
+        # Build trunk blocks to extract features
+        self.preds_triu = False
+        self.reprs = []
+        
+        for block_i, block_params in enumerate(self.trunk):
+            current = self._build_block(current, block_params)
+            if self.save_reprs:
+                self.reprs.append(current)
+        
+        # Final activation
+        embedding = layers.activate(current, self.activation)
+        return embedding
+    
+    def _build_block(self, current, block_params):
+        """Build a single block of the trunk architecture."""
         block_args = {}
-
         block_name = block_params["name"]
-
-        # save upper_tri flatten
+        
+        # Handle upper_tri special case
         self.preds_triu |= block_name == "upper_tri"
-
-        # if Keras, get block variables names
+        
+        # Set global parameters with Keras layer-specific handling
         pass_all_globals = True
         if block_name[0].isupper():
+            # For Keras layers, only pass parameters that the layer accepts
             pass_all_globals = False
             block_func = blocks.keras_func[block_name]
+            # Get the function signature parameters
             block_varnames = block_func.__init__.__code__.co_varnames
-
-        # set global defaults
+        
+        # Define global parameters to potentially pass
         global_vars = [
-            "activation",
-            "batch_norm",
-            "bn_momentum",
-            "norm_type",
-            "l2_scale",
-            "l1_scale",
-            "padding",
-            "kernel_initializer",
+            "activation", "batch_norm", "bn_momentum", "norm_type",
+            "l2_scale", "l1_scale", "padding", "kernel_initializer"
         ]
-        for gv in global_vars:
-            gv_value = getattr(self, gv, False)
-            if gv_value and (pass_all_globals or gv in block_varnames):
-                block_args[gv] = gv_value
-
-        # set remaining params
+        
+        # Set global parameters based on whether they're applicable to this layer
+        for var_name in global_vars:
+            var_value = getattr(self, var_name, False)
+            if var_value and (pass_all_globals or var_name in block_varnames):
+                block_args[var_name] = var_value
+        
+        # Set block-specific parameters
         block_args.update(block_params)
         del block_args["name"]
-
-        # save representations
-        if block_name.find("tower") != -1:
+        
+        # Handle special cases
+        if "tower" in block_name:
             block_args["reprs"] = self.reprs
-
-        # U-net helper
+            
         if block_name.startswith("unet_"):
-            # find matching representation
+            # Find matching representation for U-Net
             unet_repr = None
             for seq_repr in reversed(self.reprs[:-1]):
                 if seq_repr.shape[1] == current.shape[1] * 2:
                     unet_repr = seq_repr
                     break
             if unet_repr is None:
-                print(
-                    "Could not find matching representation for length %d" %
-                    current.shape[1],
-                    sys.stderr,
-                )
-                exit(1)
+                raise ValueError(f"Could not find matching representation for U-Net block")
             block_args["unet_repr"] = unet_repr
-
-        # switch for block
+        
+        # Build the block
         if block_name[0].islower():
+            # Custom block function
             block_func = blocks.name_func[block_name]
             current = block_func(current, **block_args)
-
         else:
+            # Keras layer
             block_func = blocks.keras_func[block_name]
             current = block_func(**block_args)(current)
-
+            
         return current
-
-    def build_model(self, save_reprs: bool = True):
-        """Build the model."""
-
-        ###################################################
-        # inputs - modified for gene expression data format
-        if not self.transpose_input:
-            # Original shape: [batch, num_bins, num_tracks]
-            tracks = tf.keras.Input(shape=(self.num_bins, self.num_tracks),
-                                    name="tracks")
+    
+    def _combine_embeddings(self, ref_embedding, alt_embedding):
+        """Combine reference and alternate embeddings using specified method."""
+        if self.finetune_method == 'concat':
+            return tf.keras.layers.Concatenate(name='combine_concat')([ref_embedding, alt_embedding])
+        elif self.finetune_method == 'divide':
+            return tf.keras.layers.Lambda(
+                lambda x: tf.math.log((x[0] + tf.keras.backend.epsilon()) / (x[1] + tf.keras.backend.epsilon())),
+                name='combine_divide'
+            )([ref_embedding, alt_embedding])
+        elif self.finetune_method == 'subtract':
+            return tf.keras.layers.Subtract(name='combine_subtract')([alt_embedding, ref_embedding])
         else:
-            # Transposed shape: [batch, num_tracks, num_bins]
-            tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
-                                    name="tracks")
+            raise ValueError(f"Unknown finetune_method: {self.finetune_method}")
+    
+    def _predict_slope(self, combined_embedding):
+        """Predict slope from combined embedding using prediction head."""
+        current = combined_embedding
         
-        current = tracks
-
-        # augmentation
-        if self.augment_r:
-            current, reverse_bool = layers.StochasticReverseTracks()(current)
-        if self.augment_shift != [0]:
-            current = layers.StochasticShift(self.augment_shift)(current)
-
-
-        self.preds_triu = False
-
-        ###################################################
-        # build network blocks
-        self.reprs = []
-        for bi, block_params in enumerate(self.trunk):
-            current = self.build_block(current, block_params)
-            if save_reprs:
+        head_keys = natsorted([v for v in vars(self) if v.startswith("head")])
+   
+        # Use architectural definition from head parameters
+        heads = [getattr(self, hk) for hk in head_keys]
+            
+        # For SlopeNN, we typically use the first head
+        head = heads[0] if heads else []
+            
+        if not isinstance(head, list):
+            head = [head]
+            
+        # Build head blocks using architectural definition
+        self.reprs = []  # Reset representations for head
+        for bi, block_params in enumerate(head):
+            current = self._build_block(current, block_params)
+            if self.save_reprs:
                 self.reprs.append(current)
 
-        # final activation
-        current = layers.activate(current, self.activation)
-
-        # make model trunk
-        trunk_output = current
-        self.model_trunk = tf.keras.Model(inputs=tracks, outputs=trunk_output)
-
-        ###################################################
-        # heads
-        head_keys = natsorted([v for v in vars(self) if v.startswith("head")])
-        self.heads = [getattr(self, hk) for hk in head_keys]
-
-        self.head_output = []
-        for hi, head in enumerate(self.heads):
-            if not isinstance(head, list):
-                head = [head]
-
-            # reset to trunk output
-            current = trunk_output
-
-            # build blocks
-            for bi, block_params in enumerate(head):
-                current = self.build_block(current, block_params)
-
-            # save head output
-            self.head_output.append(current)
-
-        ###################################################
-        # compile model(s)
-        self.models = []
-        for ho in self.head_output:
-            self.models.append(tf.keras.Model(inputs=tracks, outputs=ho))
-        self.model = self.models[0]
-
-        # add adapter
-        if hasattr(self, "adapter"):
-            raise NotImplementedError(
-                "Adapter functionality not implemented yet")
-            for hi, head in enumerate(self.heads):
-                self.models[hi] = self.insert_adapter(self.models[hi])
-            self.model = self.models[0]
-
-        if self.verbose:
-            print(self.model.summary())
-
-        # track pooling/striding and cropping, not checked yet
-        # self.track_sequence(tracks)
-
-    def build_embed(self, conv_layer_i: int, batch_norm: bool = True):
-        """Build model to embed sequences into specific layer."""
-        if conv_layer_i == -1:
-            self.model = self.model_trunk
-
-        else:
-            if batch_norm:
-                conv_layer = self.get_bn_layer(conv_layer_i)
-            else:
-                conv_layer = self.get_conv_layer(conv_layer_i)
-
-            self.model = tf.keras.Model(inputs=self.model.inputs,
-                                        outputs=conv_layer.output)
-
-    def append_activation(self):
-        """add additional activation to convert float16 output to float32, required for mixed precision"""
-        model_0 = self.model
-        new_outputs = tf.keras.layers.Activation("linear", dtype="float32")(
-            model_0.layers[-1].output)
-        self.model = tf.keras.Model(inputs=model_0.layers[0].input,
-                                    outputs=new_outputs)
-
-    def build_shifts_ensemble(self, ensemble_shifts=[0]):
-        """Build ensemble of models computing on shifted input sequences without reverse complement.
+        return current
+    
+    def extract_embeddings(self, sequences, batch_size=32):
+        """Extract embeddings from sequences using the trunk model.
         
         Args:
-            ensemble_shifts: List of shifts to apply to the input.
+            sequences: Input sequences (numpy array or tf.Tensor)
+            batch_size: Batch size for processing
+            
+        Returns:
+            Extracted embeddings
         """
-        shift_bool = len(ensemble_shifts) > 1 or ensemble_shifts[0] != 0
-        if shift_bool:
-            # input shape is different for tracks vs sequence
-            if not self.transpose_input:
-                # Original shape: [batch, num_bins, num_tracks]
-                tracks = tf.keras.Input(shape=(self.num_bins, self.num_tracks),
-                                        name="tracks")
-            else:
-                # Transposed shape: [batch, num_tracks, num_bins]
-                tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
-                                        name="tracks")
-
-            track_inputs = [tracks]
-
-            if shift_bool:
-                # generate shifted inputs
-                track_inputs = layers.EnsembleShift(ensemble_shifts)(
-                    track_inputs)
-
-            # predict each input
-            preds = [self.model(inp) for inp in track_inputs]
-
-            # create layer
-            preds_avg = tf.keras.layers.Average()(preds)
-
-            # create meta model
-            self.ensemble = tf.keras.Model(inputs=tracks, outputs=preds_avg)
+        if not hasattr(self, 'model_trunk'):
+            raise ValueError("Trunk model not built. Call build_model first.")
+            
+        return self.model_trunk.predict(sequences, batch_size=batch_size)
+    
+    def load_pretrained_weights(self, weights_path, trunk_only=True):
+        """Load pretrained weights into the model.
+        
+        Args:
+            weights_path: Path to saved weights
+            trunk_only: If True, only load trunk weights. If False, load full model weights.
+        """
+        if trunk_only:
+            if not hasattr(self, 'model_trunk'):
+                raise ValueError("Trunk model not built yet")
+            print(f"Loading trunk weights from: {weights_path}")
+            self.model_trunk.load_weights(weights_path, by_name=True)
         else:
-            # no shifts, use original model
-            self.ensemble = self.model
+            print(f"Loading full model weights from: {weights_path}")
+            print(f"Not checked yet, may cause error", sys.stderr)
+            self.model.load_weights(weights_path, by_name=True)
 
-    def build_ensemble(self, ensemble_rc: bool = False, ensemble_shifts=[0]):
-        """Build ensemble of models computing on augmented input sequences."""
-        shift_bool = len(ensemble_shifts) > 1 or ensemble_shifts[0] != 0
-        if ensemble_rc or shift_bool:
-            # sequence input
-            sequence = tf.keras.Input(shape=(self.seq_length, 4),
-                                      name="sequence")
-            sequences = [sequence]
-
-            if shift_bool:
-                # generate shifted sequences
-                sequences = layers.EnsembleShift(ensemble_shifts)(sequences)
-
-            if ensemble_rc:
-                # generate reverse complements and indicators
-                sequences_rev = layers.EnsembleReverseComplement()(sequences)
-            else:
-                sequences_rev = [(seq, tf.constant(False))
-                                 for seq in sequences]
-
-            if len(self.strand_pair) == 0:
-                strand_pair = None
-            else:
-                strand_pair = self.strand_pair[0]
-
-            # predict each sequence
-            if self.preds_triu:
-                preds = [
-                    layers.SwitchReverseTriu(
-                        self.diagonal_offset)([self.model(seq), rp])
-                    for (seq, rp) in sequences_rev
-                ]
-            else:
-                preds = [
-                    layers.SwitchReverse(strand_pair)([self.model(seq), rp])
-                    for (seq, rp) in sequences_rev
-                ]
-
-            # create layer
-            preds_avg = tf.keras.layers.Average()(preds)
-
-            # create meta model
-            self.ensemble = tf.keras.Model(inputs=sequence, outputs=preds_avg)
-
-    def build_sad(self):
-        """Sum across length axis, in graph."""
-        # sequence input
-        sequence = tf.keras.Input(shape=(self.seq_length, 4), name="sequence")
-
-        # predict
-        predictions = self.model(sequence)
-        preds_len = predictions.shape[1]
-
-        # sum pool
-        sad = preds_len * tf.keras.layers.GlobalAveragePooling1D()(predictions)
-
-        # replace model
-        self.model = tf.keras.Model(inputs=sequence, outputs=sad)
-
-    def build_slice(self, target_slice=None, target_sum: bool = False):
-        """Slice and/or sum across tasks, in graph."""
-        if target_slice is not None or target_sum:
-            # sequence input
-            sequence = tf.keras.Input(shape=(self.seq_length, 4),
-                                      name="sequence")
-
-            # predict
-            predictions = self.model(sequence)
-
-            # slice
-            if target_slice is None:
-                predictions_slice = predictions
-            else:
-                predictions_slice = tf.gather(predictions,
-                                              target_slice,
-                                              axis=-1)
-
-            # sum
-            if target_sum:
-                predictions_sum = tf.reduce_sum(predictions_slice,
-                                                keepdims=True,
-                                                axis=-1)
-            else:
-                predictions_sum = predictions_slice
-
-            # replace model
-            self.model = tf.keras.Model(inputs=sequence,
-                                        outputs=predictions_sum)
-
-    def downcast(self, dtype=tf.float16, head_i=None):
-        """Downcast model output type."""
-        # choose model
+    def append_activation(self):
+        """Add additional activation to convert float16 output to float32, required for mixed precision."""
+        model_0 = self.model
+        new_outputs = tf.keras.layers.Activation("linear", dtype="float32")(
+            model_0.layers[-1].output
+        )
+        self.model = tf.keras.Model(inputs=model_0.inputs, outputs=new_outputs)
+        
         if self.ensemble is not None:
-            model = self.ensemble
-        elif head_i is not None:
-            model = self.models[head_i]
-        else:
-            model = self.model
+            model_0 = self.ensemble
+            new_outputs = tf.keras.layers.Activation("linear", dtype="float32")(
+                model_0.layers[-1].output
+            )
+            self.ensemble = tf.keras.Model(inputs=model_0.inputs, outputs=new_outputs)
 
-        # sequence input
-        sequence = tf.keras.Input(shape=(self.seq_length, 4), name="sequence")
-
-        # predict and downcast
-        preds = model(sequence)
-        preds = tf.cast(preds, dtype)
-        model_down = tf.keras.Model(inputs=sequence, outputs=preds)
-
-        # replace model
-        if self.ensemble is not None:
-            self.ensemble = model_down
-        elif head_i is not None:
-            self.models[head_i] = model_down
-        else:
-            self.model = model_down
-
-    def evaluate(self,
-                 seq_data,
-                 head_i=None,
-                 loss_label: str = "poisson",
-                 loss_fn=None):
-        """Evaluate model on SeqDataset."""
-        # choose model
-        if self.ensemble is not None:
-            model = self.ensemble
-        elif head_i is not None:
-            model = self.models[head_i]
-        else:
-            model = self.model
-
-        # compile with dense metrics
-        num_targets = model.output_shape[-1]
-
-        if loss_fn is None:
-            loss_fn = loss_label
-
-        if loss_label == "bce":
-            model.compile(
-                optimizer=tf.keras.optimizers.SGD(),
-                loss=loss_fn,
-                metrics=[
-                    metrics.SeqAUC(curve="ROC", summarize=False),
-                    metrics.SeqAUC(curve="PR", summarize=False),
-                ],
+    # Legacy compatibility methods
+    def restore(self, model_file, trunk=False):
+        """Restore weights from saved model (legacy compatibility)."""
+        self.load_pretrained_weights(model_file, trunk_only=trunk)
+        return self.model
+    
+    def build_embed(self, sequence_type='both'):
+        """Build model for embedding extraction (legacy compatibility)."""
+        if sequence_type in ['ref', 'alt']:
+            # Single sequence embedding
+            seq_input = tf.keras.layers.Input(
+                shape=(self.seq_length, self.seq_depth), 
+                dtype=tf.float32, 
+                name=f'{sequence_type}_sequence'
+            )
+            embedding = self._extract_embedding(seq_input, name_prefix=sequence_type)
+            return tf.keras.Model(inputs=seq_input, outputs=embedding, name=f'{sequence_type}_embed_model')
+        elif sequence_type == 'both':
+            # Both sequences embedding
+            ref_input = tf.keras.layers.Input(
+                shape=(self.seq_length, self.seq_depth), 
+                dtype=tf.float32, 
+                name='ref_sequence'
+            )
+            alt_input = tf.keras.layers.Input(
+                shape=(self.seq_length, self.seq_depth), 
+                dtype=tf.float32, 
+                name='alt_sequence'
+            )
+            ref_embed = self._extract_embedding(ref_input, name_prefix="ref")
+            alt_embed = self._extract_embedding(alt_input, name_prefix="alt")
+            return tf.keras.Model(
+                inputs=[ref_input, alt_input], 
+                outputs=[ref_embed, alt_embed], 
+                name='both_embed_model'
             )
         else:
-            model.compile(
-                optimizer=tf.keras.optimizers.SGD(),
-                loss=loss_fn,
-                metrics=[
-                    metrics.PearsonR(num_targets, summarize=False),
-                    metrics.R2(num_targets, summarize=False),
-                ],
-            )
-
-        # evaluate
-        return model.evaluate(seq_data.dataset)
-
-    def get_bn_layer(self, bn_layer_i=0):
-        """Return specified batch normalization layer."""
-        bn_layers = [
-            layer for layer in self.model.layers
-            if layer.name.startswith("batch_normalization")
-        ]
-        return bn_layers[bn_layer_i]
-
-    def get_conv_layer(self, conv_layer_i=0):
-        """Return specified convolution layer."""
-        conv_layers = [
-            layer for layer in self.model.layers
-            if layer.name.startswith("conv")
-        ]
-        return conv_layers[conv_layer_i]
-
-    def get_dense_layer(self, layer_i=0):
-        """Return specified dense layer."""
-        dense_layers = [
-            layer for layer in self.model.layers
-            if layer.name.startswith("dense")
-        ]
-        return dense_layers[layer_i]
-
-    def get_conv_weights(self, conv_layer_i=0):
-        """Return kernel weights for specified convolution layer."""
-        conv_layer = self.get_conv_layer(conv_layer_i)
-        weights = conv_layer.weights[0].numpy()
-        weights = np.transpose(weights, [2, 1, 0])
-        return weights
-
-    def gradients(
-        self,
-        seq_1hot,
-        head_i=None,
-        target_slice=None,
-        pos_slice=None,
-        pos_mask=None,
-        pos_slice_denom=None,
-        pos_mask_denom=None,
-        chunk_size=None,
-        batch_size=1,
-        track_scale=1.0,
-        track_transform=1.0,
-        clip_soft=None,
-        pseudo_count=0.0,
-        untransform_old=False,
-        no_untransform=False,
-        use_mean=False,
-        use_ratio=False,
-        use_logodds=False,
-        subtract_avg=True,
-        input_gate=True,
-        dtype="float16",
-    ):
-        """Compute input gradients for sequences."""
-
-        # start time
-        t0 = time.time()
-
-        # choose model
-        if self.ensemble is not None:
-            model = self.ensemble
-        elif head_i is not None:
-            model = self.models[head_i]
-        else:
-            model = self.model
-
-        # verify tensor shape(s)
-        seq_1hot = seq_1hot.astype("float32")
-        target_slice = np.array(target_slice).astype("int32")
-        pos_slice = np.array(pos_slice).astype("int32")
-
-        # convert constants to tf tensors
-        track_scale = tf.constant(track_scale, dtype=tf.float32)
-        track_transform = tf.constant(track_transform, dtype=tf.float32)
-        if clip_soft is not None:
-            clip_soft = tf.constant(clip_soft, dtype=tf.float32)
-        pseudo_count = tf.constant(pseudo_count, dtype=tf.float32)
-
-        if pos_mask is not None:
-            pos_mask = np.array(pos_mask).astype("float32")
-
-        if use_ratio and pos_slice_denom is not None:
-            pos_slice_denom = np.array(pos_slice_denom).astype("int32")
-
-            if pos_mask_denom is not None:
-                pos_mask_denom = np.array(pos_mask_denom).astype("float32")
-
-        if len(seq_1hot.shape) < 3:
-            seq_1hot = seq_1hot[None, ...]
-
-        if len(target_slice.shape) < 2:
-            target_slice = target_slice[None, ...]
-
-        if len(pos_slice.shape) < 2:
-            pos_slice = pos_slice[None, ...]
-
-        if pos_mask is not None and len(pos_mask.shape) < 2:
-            pos_mask = pos_mask[None, ...]
-
-        if use_ratio and pos_slice_denom is not None and len(
-                pos_slice_denom.shape) < 2:
-            pos_slice_denom = pos_slice_denom[None, ...]
-
-            if pos_mask_denom is not None and len(pos_mask_denom.shape) < 2:
-                pos_mask_denom = pos_mask_denom[None, ...]
-
-        # chunk parameters
-        num_chunks = 1
-        if chunk_size is None:
-            chunk_size = seq_1hot.shape[0]
-        else:
-            num_chunks = int(np.ceil(seq_1hot.shape[0] / chunk_size))
-
-        # loop over chunks
-        grad_chunks = []
-        for ci in range(num_chunks):
-            # collect chunk
-            seq_1hot_chunk = seq_1hot[ci * chunk_size:(ci + 1) * chunk_size,
-                                      ...]
-            target_slice_chunk = target_slice[ci * chunk_size:(ci + 1) *
-                                              chunk_size, ...]
-            pos_slice_chunk = pos_slice[ci * chunk_size:(ci + 1) * chunk_size,
-                                        ...]
-
-            pos_mask_chunk = None
-            if pos_mask is not None:
-                pos_mask_chunk = pos_mask[ci * chunk_size:(ci + 1) *
-                                          chunk_size, ...]
-
-            pos_slice_denom_chunk = None
-            pos_mask_denom_chunk = None
-            if use_ratio and pos_slice_denom is not None:
-                pos_slice_denom_chunk = pos_slice_denom[ci *
-                                                        chunk_size:(ci + 1) *
-                                                        chunk_size, ...]
-
-                if pos_mask_denom is not None:
-                    pos_mask_denom_chunk = pos_mask_denom[ci *
-                                                          chunk_size:(ci + 1) *
-                                                          chunk_size, ...]
-
-            actual_chunk_size = seq_1hot_chunk.shape[0]
-
-            # convert to tf tensors
-            seq_1hot_chunk = tf.convert_to_tensor(seq_1hot_chunk,
-                                                  dtype=tf.float32)
-            target_slice_chunk = tf.convert_to_tensor(target_slice_chunk,
-                                                      dtype=tf.int32)
-            pos_slice_chunk = tf.convert_to_tensor(pos_slice_chunk,
-                                                   dtype=tf.int32)
-
-            if pos_mask is not None:
-                pos_mask_chunk = tf.convert_to_tensor(pos_mask_chunk,
-                                                      dtype=tf.float32)
-
-            if use_ratio and pos_slice_denom is not None:
-                pos_slice_denom_chunk = tf.convert_to_tensor(
-                    pos_slice_denom_chunk, dtype=tf.int32)
-
-                if pos_mask_denom is not None:
-                    pos_mask_denom_chunk = tf.convert_to_tensor(
-                        pos_mask_denom_chunk, dtype=tf.float32)
-
-            # batching parameters
-            num_batches = int(np.ceil(actual_chunk_size / batch_size))
-
-            # loop over batches
-            grad_batches = []
-            for bi in range(num_batches):
-                # collect batch
-                seq_1hot_batch = seq_1hot_chunk[bi * batch_size:(bi + 1) *
-                                                batch_size, ...]
-                target_slice_batch = target_slice_chunk[bi *
-                                                        batch_size:(bi + 1) *
-                                                        batch_size, ...]
-                pos_slice_batch = pos_slice_chunk[bi * batch_size:(bi + 1) *
-                                                  batch_size, ...]
-
-                pos_mask_batch = None
-                if pos_mask is not None:
-                    pos_mask_batch = pos_mask_chunk[bi * batch_size:(bi + 1) *
-                                                    batch_size, ...]
-
-                pos_slice_denom_batch = None
-                pos_mask_denom_batch = None
-                if use_ratio and pos_slice_denom is not None:
-                    pos_slice_denom_batch = pos_slice_denom_chunk[
-                        bi * batch_size:(bi + 1) * batch_size, ...]
-
-                    if pos_mask_denom is not None:
-                        pos_mask_denom_batch = pos_mask_denom_chunk[
-                            bi * batch_size:(bi + 1) * batch_size, ...]
-
-                grad_batch = (self.gradients_func(
-                    model,
-                    seq_1hot_batch,
-                    target_slice_batch,
-                    pos_slice_batch,
-                    pos_mask_batch,
-                    pos_slice_denom_batch,
-                    pos_mask_denom_batch,
-                    track_scale,
-                    track_transform,
-                    clip_soft,
-                    pseudo_count,
-                    untransform_old,
-                    no_untransform,
-                    use_mean,
-                    use_ratio,
-                    use_logodds,
-                    subtract_avg,
-                    input_gate,
-                ).numpy().astype(dtype))
-
-                grad_batches.append(grad_batch)
-
-            # concat gradient batches
-            grads = np.concatenate(grad_batches, axis=0)
-
-            grad_chunks.append(grads)
-
-            # collect garbage
-            gc.collect()
-
-        # concat gradient chunks
-        grads = np.concatenate(grad_chunks, axis=0)
-
-        # aggregate and broadcast to original input pattern
-        if input_gate:
-            grads = np.sum(grads, axis=-1, keepdims=True) * seq_1hot
-
-        print("Completed gradient computation in %ds" % (time.time() - t0))
-
-        return grads
-
-    @tf.function
-    def gradients_func(
-        self,
-        model,
-        seq_1hot,
-        target_slice,
-        pos_slice,
-        pos_mask=None,
-        pos_slice_denom=None,
-        pos_mask_denom=True,
-        track_scale=1.0,
-        track_transform=1.0,
-        clip_soft=None,
-        pseudo_count=0.0,
-        untransform_old=False,
-        no_untransform=False,
-        use_mean=False,
-        use_ratio=False,
-        use_logodds=False,
-        subtract_avg=True,
-        input_gate=True,
-    ):
-        """Compute gradient of the model prediction with respect to the input sequence."""
-        with tf.GradientTape() as tape:
-            tape.watch(seq_1hot)
-
-            # predict
-            preds = tf.gather(model(seq_1hot, training=False),
-                              target_slice,
-                              axis=-1,
-                              batch_dims=1)
-
-            if not no_untransform:
-                if untransform_old:
-                    # undo scale
-                    preds = preds / track_scale
-
-                    # undo clip_soft
-                    if clip_soft is not None:
-                        preds = tf.where(
-                            preds > clip_soft,
-                            (preds - clip_soft)**2 + clip_soft,
-                            preds,
-                        )
-
-                    # undo sqrt
-                    preds = preds**(1.0 / track_transform)
-                else:
-                    # undo clip_soft
-                    if clip_soft is not None:
-                        preds = tf.where(
-                            preds > clip_soft,
-                            (preds - clip_soft + 1)**2 + clip_soft - 1,
-                            preds,
-                        )
-
-                    # undo sqrt
-                    preds = -1 + (preds + 1)**(1.0 / track_transform)
-
-                    # scale
-                    preds = preds / track_scale
-
-            # aggregate over tracks (average)
-            preds = tf.reduce_mean(preds, axis=-1)
-
-            # slice specified positions
-            preds_slice = tf.gather(preds, pos_slice, axis=-1, batch_dims=1)
-            if pos_mask is not None:
-                preds_slice = preds_slice * pos_mask
-
-            # slice denominator positions
-            if use_ratio and pos_slice_denom is not None:
-                preds_slice_denom = tf.gather(preds,
-                                              pos_slice_denom,
-                                              axis=-1,
-                                              batch_dims=1)
-                if pos_mask_denom is not None:
-                    preds_slice_denom = preds_slice_denom * pos_mask_denom
-
-            # aggregate over positions
-            if not use_mean:
-                preds_agg = tf.reduce_sum(preds_slice, axis=-1)
-                if use_ratio and pos_slice_denom is not None:
-                    preds_agg_denom = tf.reduce_sum(preds_slice_denom, axis=-1)
+            raise ValueError(f"Unknown sequence_type: {sequence_type}")
+    
+    def save(self, model_file, trunk=False):
+        """Save model weights to file.
+        
+        Args:
+            model_file (str): Path to save model weights.
+            trunk (bool): Save trunk weights only.
+        """
+        if trunk:
+            if hasattr(self, 'model_trunk'):
+                self.model_trunk.save(model_file, include_optimizer=False)
             else:
-                if pos_mask is not None:
-                    preds_agg = tf.reduce_sum(
-                        preds_slice, axis=-1) / tf.reduce_sum(pos_mask,
-                                                              axis=-1)
-                else:
-                    preds_agg = tf.reduce_mean(preds_slice, axis=-1)
-
-                if use_ratio and pos_slice_denom is not None:
-                    if pos_mask_denom is not None:
-                        preds_agg_denom = tf.reduce_sum(
-                            preds_slice_denom, axis=-1) / tf.reduce_sum(
-                                pos_mask_denom, axis=-1)
-                    else:
-                        preds_agg_denom = tf.reduce_mean(preds_slice_denom,
-                                                         axis=-1)
-
-            # compute final statistic to take gradient of
-            if no_untransform:
-                score_ratios = preds_agg
-            elif not use_ratio:
-                score_ratios = tf.math.log(preds_agg + pseudo_count + 1e-6)
-            else:
-                if not use_logodds:
-                    score_ratios = tf.math.log(
-                        (preds_agg + pseudo_count) /
-                        (preds_agg_denom + pseudo_count) + 1e-6)
-                else:
-                    score_ratios = tf.math.log((
-                        (preds_agg + pseudo_count) /
-                        (preds_agg_denom + pseudo_count)) / (1.0 - (
-                            (preds_agg + pseudo_count) /
-                            (preds_agg_denom + pseudo_count))) + 1e-6)
-
-        # compute gradient
-        grads = tape.gradient(score_ratios, seq_1hot)
-
-        # zero mean each position
-        if subtract_avg:
-            grads = grads - tf.reduce_mean(grads, axis=-1, keepdims=True)
-
-        # multiply by input
-        if input_gate:
-            grads = grads * seq_1hot
-
-        return grads
-
-    def num_targets(self, head_i=None):
-        """Return number of targets."""
-        if head_i is None:
-            return self.model.output_shape[-1]
+                raise ValueError("Trunk model not available for saving")
         else:
-            return self.models[head_i].output_shape[-1]
-
+            self.model.save(model_file, include_optimizer=False)
     def __call__(self, x, head_i=None, dtype="float32"):
         """Predict targets for single batch."""
-        # choose model
         if self.ensemble is not None:
             model = self.ensemble
         elif head_i is not None:
@@ -798,214 +334,7 @@ class TracksNN:
             model = self.model
 
         preds = model(x).numpy().astype(dtype)
-        # if isinstance(x, np.ndarray):
-        #     preds = model(x).numpy().astype(dtype)
-        # else:
-        #     preds = model(x)
         return preds
-
-    def predict(
-        self,
-        seq_data,
-        head_i: int = None,
-        generator: bool = False,
-        stream: bool = False,
-        step: int = 1,
-        dtype: str = "float32",
-        **kwargs,
-    ):
-        """Predict targets for SeqDataset, with more options.
-
-        Args:
-          seq_data (SeqDataset): Dataset to predict on.
-          head_i (int): Model head index.
-          generator (bool): Use generator to predict on dataset.
-          stream (bool): Stream predictions from dataset.
-          step (int): Step size.
-          dtype (str): Data type to return.
-        """
-        # choose model
-        if self.ensemble is not None:
-            model = self.ensemble
-        elif head_i is not None:
-            model = self.models[head_i]
-        else:
-            model = self.model
-
-        dataset = getattr(seq_data, "dataset", None)
-        if dataset is None:
-            dataset = seq_data
-
-        # step slice
-        preds_len = model.outputs[0].shape[1]
-        step_i = np.arange(0, preds_len, step)
-
-        # predict
-        if generator:
-            preds = model.predict_generator(dataset, **kwargs).astype(dtype)
-        elif stream:
-            preds = []
-            for x, y in dataset:
-                yh = model.predict(x, **kwargs)
-                if step > 1:
-                    yh = yh[:, step_i, :]
-                preds.append(yh.astype(dtype))
-            preds = np.concatenate(preds, axis=0, dtype=dtype)
-        else:
-            preds = model.predict(dataset, **kwargs).astype(dtype)
-
-        if not stream and step > 1:
-            preds = preds[:, step_i, :]
-
-        return preds
-
-    def predict_transform(
-        self,
-        seq_1hot: np.array,
-        targets_df,
-        strand_transform: np.array = None,
-        untransform_old: bool = False,
-    ):
-        """Predict a single sequence and transform.
-
-        Args:
-            seq_1hot (np.array): 1-hot encoded sequence.
-            targets_df (pd.DataFrame): Targets dataframe.
-            strand_transform (np.array): Strand merging transform.
-            untransform_old (bool): Apply old untransform.
-        """
-        # predict
-        preds = self(seq_1hot)[0]
-
-        # untransform predictions
-        if untransform_old:
-            preds = dataset.untransform_preds1(preds, targets_df)
-        else:
-            preds = dataset.untransform_preds(preds, targets_df)
-
-        # sum strand pairs
-        if strand_transform is not None:
-            preds = preds * strand_transform
-
-        return preds
-
-    def restore(self, model_file, head_i=0, trunk=False):
-        """Restore weights from saved model."""
-        if trunk:
-            self.model_trunk.load_weights(model_file)
-        else:
-            self.models[head_i].load_weights(model_file)
-            self.model = self.models[head_i]
-
-    def save(self, model_file, trunk=False):
-        """Save model weights to file.
-
-        Args:
-          model_file (str): Path to save model weights.
-          trunk (bool): Save trunk weights only.
-        """
-        if trunk:
-            self.model_trunk.save(model_file, include_optimizer=False)
-        else:
-            self.model.save(model_file, include_optimizer=False)
-
-    def step(self, step=2, head_i=None):
-        """Create new model to step positions across data.
-
-        Args:
-          step (int): Step size.
-          head_i (int): Model head index.
-        """
-        # choose model
-        if self.ensemble is not None:
-            model = self.ensemble
-        elif head_i is not None:
-            model = self.models[head_i]
-        else:
-            model = self.model
-
-        # tracks input
-        if not self.transpose_input:
-            # Original shape: [batch, num_bins, num_tracks]
-            tracks = tf.keras.Input(shape=(self.num_bins, self.num_tracks),
-                                    name="tracks")
-        else:
-            # Transposed shape: [batch, num_tracks, num_bins]
-            tracks = tf.keras.Input(shape=(self.num_tracks, self.num_bins),
-                                    name="tracks")
-
-        # predict and step across positions (for gene data, usually on the bins dimension)
-        preds = model(tracks)
-
-        # For transposed input, the positions to step over are in the last dimension
-        if not self.transpose_input:
-            step_positions = np.arange(preds.shape[1], step=step)
-            preds_step = tf.gather(preds, step_positions, axis=-2)
-        else:
-            step_positions = np.arange(preds.shape[2], step=step)
-            preds_step = tf.gather(preds, step_positions, axis=-1)
-
-        model_step = tf.keras.Model(inputs=tracks, outputs=preds_step)
-
-        # replace model
-        if self.ensemble is not None:
-            self.ensemble = model_step
-        elif head_i is not None:
-            self.models[head_i] = model_step
-        else:
-            self.model = model_step
-
-    def track_sequence(self, sequence):
-        """Track pooling, striding, and cropping of sequence.
-
-        Args:
-          sequence (tf.Tensor): Sequence input.
-        """
-        self.model_strides = []
-        self.target_lengths = []
-        self.target_crops = []
-        for model in self.models:
-            # determine model stride
-            self.model_strides.append(1)
-            for layer in self.model.layers:
-                if hasattr(layer, "strides") or hasattr(layer, "size"):
-                    stride_factor = layer.input_shape[1] / layer.output_shape[1]
-                    self.model_strides[-1] *= stride_factor
-            self.model_strides[-1] = int(self.model_strides[-1])
-
-            # determine predictions length before cropping
-            if type(sequence.shape[1]) == tf.compat.v1.Dimension:
-                target_full_length = sequence.shape[
-                    1].value // self.model_strides[-1]
-            else:
-                target_full_length = sequence.shape[1] // self.model_strides[-1]
-
-            # determine predictions length after cropping
-            self.target_lengths.append(model.outputs[0].shape[1])
-            if type(self.target_lengths[-1]) == tf.compat.v1.Dimension:
-                self.target_lengths[-1] = self.target_lengths[-1].value
-            self.target_crops.append(
-                (target_full_length - self.target_lengths[-1]) // 2)
-
-        if self.verbose:
-            print("model_strides", self.model_strides)
-            print("target_lengths", self.target_lengths)
-            print("target_crops", self.target_crops)
-
-    # method for inserting adapter for transfer learning
-    def insert_adapter(self, model):
-        if self.adapter == "houlsby":
-            output_model = transfer.add_houlsby(
-                model, self.strand_pair[0], latent_size=self.adapter_latent)
-        elif self.adapter == "houlsby_se":
-            output_model = transfer.add_houlsby_se(
-                model,
-                self.strand_pair[0],
-                houlsby_latent=self.adapter_latent,
-                conv_select=self.conv_select,
-                se_rank=self.se_rank,
-            )
-        return output_model
 
 class SeqNN:
     """Sequence neural network model.
@@ -1152,8 +481,11 @@ class SeqNN:
             current = trunk_output
 
             # build blocks
+            self.reprs = []
             for bi, block_params in enumerate(head):
                 current = self.build_block(current, block_params)
+                if save_reprs:
+                    self.reprs.append(current)
 
             if hi < len(self.strand_pair):
                 strand_pair = self.strand_pair[hi]
@@ -1368,8 +700,7 @@ class SeqNN:
     def get_bn_layer(self, bn_layer_i=0):
         """Return specified batch normalization layer."""
         bn_layers = [
-            layer
-            for layer in self.model.layers
+            layer for layer in self.model.layers
             if layer.name.startswith("batch_normalization")
         ]
         return bn_layers[bn_layer_i]
@@ -1384,7 +715,8 @@ class SeqNN:
     def get_dense_layer(self, layer_i=0):
         """Return specified dense layer."""
         dense_layers = [
-            layer for layer in self.model.layers if layer.name.startswith("dense")
+            layer for layer in self.model.layers
+            if layer.name.startswith("dense")
         ]
         return dense_layers[layer_i]
 
@@ -1600,8 +932,17 @@ class SeqNN:
         grads = np.concatenate(grad_chunks, axis=0)
 
         # aggregate and broadcast to original input pattern
-        if input_gate:
-            grads = np.sum(grads, axis=-1, keepdims=True) * seq_1hot
+        model_type = getattr(self, 'model_type', None)
+        if model_type == '2d_to_1d' or (model_type is None and len(seq_1hot.shape) == 3):
+            # For 2d_to_1d models, grads already have shape [batch, seq_length, seq_depth, num_tissues]
+            # No additional aggregation needed - each tissue gradient is preserved
+            if input_gate:
+                # The input_gate operation was already applied in gradients_func
+                pass
+        else:
+            # Original 2d_to_2d behavior
+            if input_gate:
+                grads = np.sum(grads, axis=-1, keepdims=True) * seq_1hot
 
         print("Completed gradient computation in %ds" % (time.time() - t0))
 
@@ -1632,113 +973,160 @@ class SeqNN:
         """Compute gradient of the model prediction with respect to the input sequence."""
         with tf.GradientTape() as tape:
             tape.watch(seq_1hot)
-
+            # print(f"seq_1hot.shape: {seq_1hot.shape}")
             # predict
-            preds = tf.gather(
-                model(seq_1hot, training=False), target_slice, axis=-1, batch_dims=1
-            )
+            preds = model(seq_1hot, training=False)
+            # print(f"preds.shape: {preds.shape}")
+            
+            preds = preds / track_scale
 
-            if not no_untransform:
-                if untransform_old:
-                    # undo scale
-                    preds = preds / track_scale
-
-                    # undo clip_soft
-                    if clip_soft is not None:
-                        preds = tf.where(
-                            preds > clip_soft,
-                            (preds - clip_soft) ** 2 + clip_soft,
-                            preds,
-                        )
-
-                    # undo sqrt
-                    preds = preds ** (1.0 / track_transform)
+            # Check model type to determine processing path
+            # Use model_type attribute if available, otherwise infer from output shape
+            model_type = getattr(self, 'model_type', None)
+            if model_type == '2d_to_1d' or (model_type is None and len(preds.shape) == 2):
+                # 1D output: [batch, 23tissues] for 2d_to_1d models
+                # preds shape should be [batch, num_tissues] - no squeezing needed
+                
+                # For 2d_to_1d models, compute gradients for each tissue separately
+                # untransform default
+                if not no_untransform:
+                    score_ratios = tf.maximum(tf.exp(preds) - 1.0, 0.0)
                 else:
-                    # undo clip_soft
-                    if clip_soft is not None:
-                        preds = tf.where(
-                            preds > clip_soft,
-                            (preds - clip_soft + 1) ** 2 + clip_soft - 1,
-                            preds,
-                        )
+                    score_ratios = preds
+                    
+            else:  # 2D output: [batch, length, targets] - for 2d_to_2d models (original borzoi behavior)
+                preds = tf.gather(preds, target_slice, axis=-1, batch_dims=1)
 
-                    # undo sqrt
-                    preds = -1 + (preds + 1) ** (1.0 / track_transform)
+                if not no_untransform:
+                    if untransform_old:
+                        # undo scale
+                        preds = preds / track_scale
 
-                    # scale
-                    preds = preds / track_scale
-
-            # aggregate over tracks (average)
-            preds = tf.reduce_mean(preds, axis=-1)
-
-            # slice specified positions
-            preds_slice = tf.gather(preds, pos_slice, axis=-1, batch_dims=1)
-            if pos_mask is not None:
-                preds_slice = preds_slice * pos_mask
-
-            # slice denominator positions
-            if use_ratio and pos_slice_denom is not None:
-                preds_slice_denom = tf.gather(
-                    preds, pos_slice_denom, axis=-1, batch_dims=1
-                )
-                if pos_mask_denom is not None:
-                    preds_slice_denom = preds_slice_denom * pos_mask_denom
-
-            # aggregate over positions
-            if not use_mean:
-                preds_agg = tf.reduce_sum(preds_slice, axis=-1)
-                if use_ratio and pos_slice_denom is not None:
-                    preds_agg_denom = tf.reduce_sum(preds_slice_denom, axis=-1)
-            else:
-                if pos_mask is not None:
-                    preds_agg = tf.reduce_sum(preds_slice, axis=-1) / tf.reduce_sum(
-                        pos_mask, axis=-1
-                    )
-                else:
-                    preds_agg = tf.reduce_mean(preds_slice, axis=-1)
-
-                if use_ratio and pos_slice_denom is not None:
-                    if pos_mask_denom is not None:
-                        preds_agg_denom = tf.reduce_sum(
-                            preds_slice_denom, axis=-1
-                        ) / tf.reduce_sum(pos_mask_denom, axis=-1)
-                    else:
-                        preds_agg_denom = tf.reduce_mean(preds_slice_denom, axis=-1)
-
-            # compute final statistic to take gradient of
-            if no_untransform:
-                score_ratios = preds_agg
-            elif not use_ratio:
-                score_ratios = tf.math.log(preds_agg + pseudo_count + 1e-6)
-            else:
-                if not use_logodds:
-                    score_ratios = tf.math.log(
-                        (preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count)
-                        + 1e-6
-                    )
-                else:
-                    score_ratios = tf.math.log(
-                        ((preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count))
-                        / (
-                            1.0
-                            - (
-                                (preds_agg + pseudo_count)
-                                / (preds_agg_denom + pseudo_count)
+                        # undo clip_soft
+                        if clip_soft is not None:
+                            preds = tf.where(
+                                preds > clip_soft,
+                                (preds - clip_soft) ** 2 + clip_soft,
+                                preds,
                             )
-                        )
-                        + 1e-6
+
+                        # undo sqrt
+                        preds = preds ** (1.0 / track_transform)
+                    else:
+                        # undo clip_soft
+                        if clip_soft is not None:
+                            preds = tf.where(
+                                preds > clip_soft,
+                                (preds - clip_soft + 1) ** 2 + clip_soft - 1,
+                                preds,
+                            )
+
+                        # undo sqrt
+                        preds = -1 + (preds + 1) ** (1.0 / track_transform)
+
+                        # scale
+                        preds = preds / track_scale
+
+                # aggregate over tracks (average)
+                preds = tf.reduce_mean(preds, axis=-1)
+
+                # slice specified positions
+                preds_slice = tf.gather(preds, pos_slice, axis=-1, batch_dims=1)
+                if pos_mask is not None:
+                    preds_slice = preds_slice * pos_mask
+
+                # slice denominator positions
+                if use_ratio and pos_slice_denom is not None:
+                    preds_slice_denom = tf.gather(
+                        preds, pos_slice_denom, axis=-1, batch_dims=1
                     )
+                    if pos_mask_denom is not None:
+                        preds_slice_denom = preds_slice_denom * pos_mask_denom
+
+                # aggregate over positions
+                if not use_mean:
+                    preds_agg = tf.reduce_sum(preds_slice, axis=-1)
+                    if use_ratio and pos_slice_denom is not None:
+                        preds_agg_denom = tf.reduce_sum(preds_slice_denom, axis=-1)
+                else:
+                    if pos_mask is not None:
+                        preds_agg = tf.reduce_sum(preds_slice, axis=-1) / tf.reduce_sum(
+                            pos_mask, axis=-1
+                        )
+                    else:
+                        preds_agg = tf.reduce_mean(preds_slice, axis=-1)
+
+                    if use_ratio and pos_slice_denom is not None:
+                        if pos_mask_denom is not None:
+                            preds_agg_denom = tf.reduce_sum(
+                                preds_slice_denom, axis=-1
+                            ) / tf.reduce_sum(pos_mask_denom, axis=-1)
+                        else:
+                            preds_agg_denom = tf.reduce_mean(preds_slice_denom, axis=-1)
+
+                # compute final statistic to take gradient of
+                if no_untransform:
+                    score_ratios = preds_agg
+                elif not use_ratio:
+                    score_ratios = tf.math.log(preds_agg + pseudo_count + 1e-6)
+                else:
+                    if not use_logodds:
+                        score_ratios = tf.math.log(
+                            (preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count)
+                            + 1e-6
+                        )
+                    else:
+                        score_ratios = tf.math.log(
+                            ((preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count))
+                            / (
+                                1.0
+                                - (
+                                    (preds_agg + pseudo_count)
+                                    / (preds_agg_denom + pseudo_count)
+                                )
+                            )
+                            + 1e-6
+                        )
 
         # compute gradient
-        grads = tape.gradient(score_ratios, seq_1hot)
+        model_type = getattr(self, 'model_type', None)
+        if model_type == '2d_to_1d' or (model_type is None and len(preds.shape) == 2):
+            # For 2d_to_1d models, compute gradients for each tissue separately
+            # score_ratios shape: [batch, num_tissues]
+            # print(f"score_ratios.shape: {score_ratios.shape}")
+            
+            # Compute gradients for each tissue separately using vectorized operations
+            # score_ratios shape: [batch, num_tissues]
+            # We need to compute gradients for each tissue and stack them
+            
+            # Use batch_jacobian to compute gradients for each tissue separately
+            # This gives us [batch, num_tissues, seq_length, seq_depth] shape
+            grads = tape.batch_jacobian(score_ratios, seq_1hot)
+            # print(f"grads.shape: {grads.shape}")
+            
+            # Transpose to get [batch, seq_length, seq_depth, num_tissues] shape
+            grads = tf.transpose(grads, [0, 2, 3, 1])
+            # print(f"transposed grads.shape: {grads.shape}") 
+            # zero mean each position for each tissue
+            if subtract_avg:
+                grads = grads - tf.reduce_mean(grads, axis=-2, keepdims=True)
+            
+            # multiply by input for each tissue
+            if input_gate:
+                # Expand seq_1hot to match grads shape: [batch, seq_length, seq_depth, 1]
+                seq_1hot_expanded = tf.expand_dims(seq_1hot, axis=-1)
+                grads = grads * seq_1hot_expanded
+        else:
+            # Original 2d_to_2d behavior
+            grads = tape.gradient(score_ratios, seq_1hot)
 
-        # zero mean each position
-        if subtract_avg:
-            grads = grads - tf.reduce_mean(grads, axis=-1, keepdims=True)
+            # zero mean each position
+            if subtract_avg:
+                grads = grads - tf.reduce_mean(grads, axis=-1, keepdims=True)
 
-        # multiply by input
-        if input_gate:
-            grads = grads * seq_1hot
+            # multiply by input
+            if input_gate:
+                grads = grads * seq_1hot
 
         return grads
 
@@ -1854,9 +1242,9 @@ class SeqNN:
     def restore(self, model_file, head_i=0, trunk=False):
         """Restore weights from saved model."""
         if trunk:
-            self.model_trunk.load_weights(model_file, by_name=True, skip_mismatch=True)
+            self.model_trunk.load_weights(model_file, by_name=True)
         else:
-            self.models[head_i].load_weights(model_file)
+            self.models[head_i].load_weights(model_file, by_name=True)
             self.model = self.models[head_i]
 
     def save(self, model_file, trunk=False):

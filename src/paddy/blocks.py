@@ -1903,12 +1903,13 @@ def final(
     kernel_initializer="he_normal",
     l2_scale=0,
     l1_scale=0,
+    squeeze=False,
     **kwargs,
 ):
     """Final simple transformation before comparison to targets.
 
     Args:
-      inputs:         [batch_size, seq_length, features] input sequence
+      inputs:         [batch_size, seq_length(?), features] input sequence
       units:          Dense units
       activation:     relu/gelu/etc
       flatten:        Flatten positional axis.
@@ -1937,6 +1938,9 @@ def final(
         kernel_initializer=kernel_initializer,
         kernel_regularizer=tf.keras.regularizers.l1_l2(l1_scale, l2_scale),
     )(current)
+
+    if squeeze:
+        current = tf.keras.layers.Lambda(lambda x: tf.squeeze(x, axis=-1))(current)
 
     return current
 
@@ -2005,6 +2009,7 @@ def dense_head(
     kernel_initializer="he_normal",
     l2_scale=0,
     l1_scale=0,
+    squeeze=False,
     **kwargs,
 ):
     """Construct a classification/regression head with dense layers.
@@ -2018,6 +2023,7 @@ def dense_head(
       final_activation: Activation for the final layer (e.g. softplus for expression data)
       l2_scale:        L2 regularization weight
       l1_scale:        L1 regularization weight
+      squeeze:         Whether to squeeze the output dimension
 
     Returns:
       [batch_size, units] output predictions
@@ -2043,6 +2049,9 @@ def dense_head(
         kernel_initializer=kernel_initializer,
         kernel_regularizer=tf.keras.regularizers.l1_l2(l1_scale, l2_scale),
     )(current)
+
+    if squeeze:
+        current = tf.keras.layers.Lambda(lambda x: tf.squeeze(x, axis=-1))(current)
 
     return current
 
@@ -2083,6 +2092,200 @@ def dense_position(inputs,
         name="positional_embedding_layer")(inputs)
 
 
+############################################################
+# Tissue-specific blocks
+############################################################
+
+def tissue_specific_attention(
+    inputs,
+    num_tissues=23,
+    attention_dim=64,
+    use_tissue_context=True,
+    dropout_rate=0.1,
+    l2_scale=0.0001,
+    kernel_initializer="glorot_uniform",
+    **kwargs
+):
+    """Tissue-specific attention mechanism for expression prediction.
+    
+    This block uses the TissueSpecificAttention layer to allow the model to focus
+    on different genomic features for different tissues, enabling better
+    capture of tissue-specific regulatory patterns.
+    
+    Args:
+        inputs: Input tensor with shape [batch_size, feature_dim]
+        num_tissues: Number of tissue types to model
+        attention_dim: Dimension of the attention space
+        use_tissue_context: Whether to use tissue context vectors
+        dropout_rate: Dropout rate for attention weights
+        l2_scale: L2 regularization scale
+        kernel_initializer: Initializer for dense layers
+        
+    Returns:
+        Tensor with shape [batch_size, num_tissues] with tissue-specific predictions
+    """
+    return layers.TissueSpecificAttention(
+        num_tissues=num_tissues,
+        attention_dim=attention_dim,
+        use_tissue_context=use_tissue_context,
+        dropout_rate=dropout_rate
+    )(inputs)
+
+
+def tissue_relationship_encoder(
+    inputs,
+    tissue_embedding_dim=32,
+    num_tissues=23,
+    tissue_graph_layers=2,
+    dropout_rate=0.1,
+    l2_scale=0.0001,
+    kernel_initializer="glorot_uniform",
+    **kwargs
+):
+    """Tissue relationship encoder for capturing inter-tissue expression patterns.
+    
+    This block uses the TissueRelationshipEncoder layer to model relationships between
+    different tissues, allowing the network to learn shared regulatory patterns.
+    
+    Args:
+        inputs: Input tensor with shape [batch_size, feature_dim]
+        tissue_embedding_dim: Dimension for tissue embeddings
+        num_tissues: Number of tissue types to model
+        tissue_graph_layers: Number of graph convolution layers
+        dropout_rate: Dropout rate
+        l2_scale: L2 regularization scale
+        kernel_initializer: Initializer for dense layers
+        
+    Returns:
+        Tensor with shape [batch_size, num_tissues] with tissue expression predictions
+    """
+    return layers.TissueRelationshipEncoder(
+        tissue_embedding_dim=tissue_embedding_dim,
+        num_tissues=num_tissues,
+        tissue_graph_layers=tissue_graph_layers,
+        dropout_rate=dropout_rate
+    )(inputs)
+
+
+def tissue_multihead_attention(
+    inputs,
+    num_tissues=23,
+    key_size=32,
+    heads=4,
+    dropout_rate=0.1,
+    attention_dropout=0.05,
+    l2_scale=0.0001,
+    mha_l2_scale=0.00001,
+    kernel_initializer="glorot_uniform",
+    **kwargs
+):
+    """Multi-head attention mechanism for tissue expression relationships.
+    
+    This block implements a multi-head attention mechanism specifically designed
+    to model relationships between different tissues. It allows the model to 
+    attend to different feature patterns for different tissue pairs.
+    
+    Args:
+        inputs: Input tensor with shape [batch_size, feature_dim]
+        num_tissues: Number of tissue types to model
+        key_size: Size of attention keys
+        heads: Number of attention heads
+        dropout_rate: Dropout rate for outputs
+        attention_dropout: Dropout rate within attention mechanism
+        l2_scale: L2 regularization scale for dense layers
+        mha_l2_scale: L2 regularization scale for attention layers
+        kernel_initializer: Initializer for dense layers
+        
+    Returns:
+        Tensor with shape [batch_size, num_tissues] with tissue expression predictions
+    """
+    # Project input features to a shared representation
+    shared_features = tf.keras.layers.Dense(
+        128,
+        activation="gelu",
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="shared_features"
+    )(inputs)
+    
+    # Create tissue embeddings
+    tissue_embeddings = tf.keras.layers.Embedding(
+        num_tissues,
+        key_size * heads,
+        embeddings_initializer=kernel_initializer,
+        name="tissue_embeddings"
+    )(tf.range(num_tissues))  # [num_tissues, key_size*heads]
+    
+    # Create query vectors from shared features
+    queries = tf.keras.layers.Dense(
+        key_size * heads,
+        use_bias=False,
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(mha_l2_scale),
+        name="queries"
+    )(shared_features)  # [batch_size, key_size*heads]
+    
+    # Reshape queries for multi-head attention
+    batch_size = tf.shape(shared_features)[0]
+    queries = tf.reshape(queries, [batch_size, heads, key_size])  # [batch_size, heads, key_size]
+    
+    # Create a separate dense layer to transform tissue embeddings
+    tissue_features = tf.keras.layers.Dense(
+        key_size * heads,
+        activation=None,
+        use_bias=False,
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(mha_l2_scale),
+        name="tissue_projection"
+    )(tissue_embeddings)  # [num_tissues, key_size*heads]
+    
+    # Reshape tissue features for multi-head attention
+    tissue_features = tf.reshape(tissue_features, [num_tissues, heads, key_size])
+    
+    # Create keys and values from tissue features
+    keys = tissue_features  # [num_tissues, heads, key_size]
+    values = tissue_features  # [num_tissues, heads, key_size]
+    
+    # Compute attention scores
+    # [batch_size, heads, num_tissues]
+    attention_scores = tf.einsum('bhk,thk->bht', queries, keys)
+    
+    # Scale attention scores
+    attention_scores = attention_scores / tf.math.sqrt(tf.cast(key_size, tf.float32))
+    
+    # Apply softmax to get attention weights
+    attention_weights = tf.nn.softmax(attention_scores, axis=-1)
+    attention_weights = tf.keras.layers.Dropout(attention_dropout)(attention_weights)
+    
+    # Apply attention weights to values
+    # [batch_size, heads, key_size]
+    context_vectors = tf.einsum('bht,thk->bhk', attention_weights, values)
+    
+    # Reshape and project context vectors
+    context_vectors = tf.reshape(context_vectors, [batch_size, heads * key_size])
+    
+    # Project to tissue-specific outputs
+    tissue_features = tf.keras.layers.Dense(
+        num_tissues * 2,
+        activation="gelu",
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="tissue_features"
+    )(context_vectors)
+    
+    # Apply dropout
+    tissue_features = tf.keras.layers.Dropout(dropout_rate)(tissue_features)
+    
+    # Final prediction layer
+    tissue_outputs = tf.keras.layers.Dense(
+        num_tissues,
+        activation="softplus",
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="tissue_expression"
+    )(tissue_features)
+    
+    return tissue_outputs
 
 
 ############################################################
@@ -2125,7 +2328,10 @@ name_func = {
     "unet_concat": unet_concat,
     "upper_tri": upper_tri,
     "wheeze_excite": wheeze_excite,
-    "dense_position": dense_position
+    "dense_position": dense_position,
+    "tissue_specific_attention": tissue_specific_attention,
+    "tissue_relationship_encoder": tissue_relationship_encoder,
+    "tissue_multihead_attention": tissue_multihead_attention
 }
 
 keras_func = {
@@ -2133,5 +2339,8 @@ keras_func = {
     "Cropping1D": tf.keras.layers.Cropping1D,
     "Cropping2D": tf.keras.layers.Cropping2D,
     "Dense": tf.keras.layers.Dense,
+    "Flatten": tf.keras.layers.Flatten,
+    "BatchNormalization": tf.keras.layers.BatchNormalization,
+    "LayerNormalization": tf.keras.layers.LayerNormalization,
     "Flatten": tf.keras.layers.Flatten,
 }

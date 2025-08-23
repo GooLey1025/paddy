@@ -800,6 +800,252 @@ class SoftmaxPool1D(tf.keras.layers.Layer):
 
 
 ############################################################
+# Tissue-specific layers
+############################################################
+
+class TissueSpecificAttention(tf.keras.layers.Layer):
+    """Tissue-specific attention mechanism for expression prediction.
+    
+    This layer implements an attention mechanism that allows the model to focus
+    on different genomic features for different tissues, enabling better
+    capture of tissue-specific regulatory patterns.
+    
+    Args:
+        num_tissues: Number of tissue types to model.
+        attention_dim: Dimension of the attention space.
+        use_tissue_context: Whether to use tissue context vectors.
+        dropout_rate: Dropout rate for attention weights.
+    """
+    
+    def __init__(
+        self,
+        num_tissues=23,
+        attention_dim=64,
+        use_tissue_context=True,
+        dropout_rate=0.1,
+        **kwargs
+    ):
+        super(TissueSpecificAttention, self).__init__(**kwargs)
+        self.num_tissues = num_tissues
+        self.attention_dim = attention_dim
+        self.use_tissue_context = use_tissue_context
+        self.dropout_rate = dropout_rate
+        
+    def build(self, input_shape):
+        # Input shape should be [batch_size, feature_dim]
+        feature_dim = input_shape[-1]
+        
+        # Create tissue-specific query vectors
+        self.tissue_queries = self.add_weight(
+            shape=(self.num_tissues, self.attention_dim),
+            initializer="glorot_uniform",
+            trainable=True,
+            name="tissue_queries"
+        )
+        
+        # Projection for input features
+        self.feature_projection = tf.keras.layers.Dense(
+            self.attention_dim,
+            activation="tanh",
+            name="feature_projection"
+        )
+        
+        # Optional tissue context vectors
+        if self.use_tissue_context:
+            self.tissue_context = self.add_weight(
+                shape=(self.num_tissues, feature_dim),
+                initializer="glorot_uniform",
+                trainable=True,
+                name="tissue_context"
+            )
+        
+        # Output projection layers - one per tissue
+        self.tissue_outputs = []
+        for i in range(self.num_tissues):
+            self.tissue_outputs.append(
+                tf.keras.layers.Dense(
+                    1,
+                    activation="softplus",  # Typical for expression prediction
+                    name=f"tissue_{i}_output"
+                )
+            )
+        
+        self.dropout = tf.keras.layers.Dropout(self.dropout_rate)
+        super(TissueSpecificAttention, self).build(input_shape)
+    
+    def call(self, inputs, training=None):
+        # Project input features to attention space
+        projected_features = self.feature_projection(inputs)  # [batch, attention_dim]
+        
+        # Initialize output tensor
+        batch_size = tf.shape(inputs)[0]
+        all_tissue_outputs = []
+        
+        # Process each tissue separately
+        for i in range(self.num_tissues):
+            # Get tissue-specific query
+            tissue_query = self.tissue_queries[i:i+1]  # [1, attention_dim]
+            
+            # Calculate attention scores
+            attention_scores = tf.reduce_sum(
+                projected_features * tissue_query, axis=-1
+            )  # [batch]
+            
+            # Apply attention to input features
+            attention_weights = tf.nn.softmax(attention_scores)
+            attention_weights = self.dropout(attention_weights, training=training)
+            
+            # Apply attention weights
+            weighted_features = inputs * tf.expand_dims(attention_weights, axis=-1)  # [batch, feature_dim]
+            
+            # Add tissue context if enabled
+            if self.use_tissue_context:
+                tissue_ctx = self.tissue_context[i:i+1]  # [1, feature_dim]
+                weighted_features = weighted_features + tissue_ctx
+            
+            # Generate tissue-specific output
+            tissue_output = self.tissue_outputs[i](weighted_features)  # [batch, 1]
+            
+            all_tissue_outputs.append(tissue_output)
+        
+        # Concatenate all tissue outputs
+        outputs = tf.concat(all_tissue_outputs, axis=1)  # [batch, num_tissues]
+        
+        return outputs
+    
+    def get_config(self):
+        config = super(TissueSpecificAttention, self).get_config()
+        config.update({
+            "num_tissues": self.num_tissues,
+            "attention_dim": self.attention_dim,
+            "use_tissue_context": self.use_tissue_context,
+            "dropout_rate": self.dropout_rate
+        })
+        return config
+
+
+class TissueRelationshipEncoder(tf.keras.layers.Layer):
+    """Tissue relationship encoder for capturing inter-tissue expression patterns.
+    
+    This layer implements a graph-based approach to model relationships between
+    different tissues, allowing the network to learn shared regulatory patterns.
+    
+    Args:
+        tissue_embedding_dim: Dimension for tissue embeddings
+        num_tissues: Number of tissue types to model
+        tissue_graph_layers: Number of graph convolution layers
+        dropout_rate: Dropout rate
+    """
+    
+    def __init__(
+        self,
+        tissue_embedding_dim=32,
+        num_tissues=23,
+        tissue_graph_layers=2,
+        dropout_rate=0.1,
+        **kwargs
+    ):
+        super(TissueRelationshipEncoder, self).__init__(**kwargs)
+        self.tissue_embedding_dim = tissue_embedding_dim
+        self.num_tissues = num_tissues
+        self.tissue_graph_layers = tissue_graph_layers
+        self.dropout_rate = dropout_rate
+    
+    def build(self, input_shape):
+        # Create tissue embeddings
+        self.tissue_embeddings = self.add_weight(
+            shape=(self.num_tissues, self.tissue_embedding_dim),
+            initializer="glorot_uniform",
+            trainable=True,
+            name="tissue_embeddings"
+        )
+        
+        # Create tissue adjacency matrix (learnable)
+        self.adjacency_projection = tf.keras.layers.Dense(
+            self.num_tissues, 
+            activation="sigmoid",
+            use_bias=False,
+            name="adjacency_projection"
+        )
+        
+        # Initial feature projection
+        self.feature_projection = tf.keras.layers.Dense(
+            self.tissue_embedding_dim,
+            activation=None,
+            name="feature_projection"
+        )
+        
+        # Graph convolution layers
+        self.graph_layers = []
+        for i in range(self.tissue_graph_layers):
+            self.graph_layers.append(
+                tf.keras.layers.Dense(
+                    self.tissue_embedding_dim,
+                    activation="gelu",
+                    name=f"graph_layer_{i}"
+                )
+            )
+        
+        # Output layer
+        self.output_layer = tf.keras.layers.Dense(
+            1,
+            activation="softplus",
+            name="tissue_expression"
+        )
+        
+        # Dropout layer
+        self.dropout = tf.keras.layers.Dropout(self.dropout_rate)
+        
+        super(TissueRelationshipEncoder, self).build(input_shape)
+    
+    def call(self, inputs, training=None):
+        # Generate tissue adjacency matrix
+        tissue_adjacency = self.adjacency_projection(self.tissue_embeddings)
+        
+        # Symmetrize adjacency matrix
+        tissue_adjacency = (tissue_adjacency + tf.transpose(tissue_adjacency)) / 2.0
+        
+        # Project input features
+        batch_size = tf.shape(inputs)[0]
+        tissue_features = self.feature_projection(inputs)  # [batch, tissue_embedding_dim]
+        
+        # Expand to all tissues
+        tissue_features = tf.expand_dims(tissue_features, axis=1)  # [batch, 1, tissue_embedding_dim]
+        tissue_features = tf.tile(tissue_features, [1, self.num_tissues, 1])  # [batch, num_tissues, tissue_embedding_dim]
+        
+        # Apply graph convolution layers
+        for graph_layer in self.graph_layers:
+            # Message passing between tissues
+            tissue_messages = tf.matmul(tissue_adjacency, tissue_features)  # [batch, num_tissues, tissue_embedding_dim]
+            
+            # Update tissue features
+            tissue_features = tissue_features + tissue_messages
+            tissue_features = graph_layer(tissue_features)
+            
+            # Apply dropout
+            if training:
+                tissue_features = self.dropout(tissue_features)
+        
+        # Final prediction layer for each tissue
+        tissue_outputs = self.output_layer(tissue_features)  # [batch, num_tissues, 1]
+        
+        # Squeeze last dimension
+        tissue_outputs = tf.squeeze(tissue_outputs, axis=-1)  # [batch, num_tissues]
+        
+        return tissue_outputs
+    
+    def get_config(self):
+        config = super(TissueRelationshipEncoder, self).get_config()
+        config.update({
+            "tissue_embedding_dim": self.tissue_embedding_dim,
+            "num_tissues": self.num_tissues,
+            "tissue_graph_layers": self.tissue_graph_layers,
+            "dropout_rate": self.dropout_rate
+        })
+        return config
+
+
+############################################################
 # Position
 ############################################################
 class ConcatPosition(tf.keras.layers.Layer):

@@ -11,6 +11,8 @@ matplotlib
 tensorboard
 scikit-learn
 openpyxl
+umap-learn
+seaborn
 
 [dev]
 pytest

@@ -50,8 +50,8 @@ def parse_loss(
         elif loss_label == "mse_udot":
             loss_fn = metrics.MeanSquaredErrorUDot(
                 spec_weight, reduction=tf.keras.losses.Reduction.NONE)
-        elif loss_label == "mse_plus_pearsonr":
-            loss_fn = metrics.MSEPlusPearsonLoss(
+        elif loss_label == "slope_regression_loss":
+            loss_fn = metrics.SlopeRegressionLoss(
                 reduction=tf.keras.losses.Reduction.NONE)
         else:
             loss_fn = tf.keras.losses.Poisson(
@@ -65,14 +65,15 @@ def parse_loss(
             loss_fn = tf.keras.losses.BinaryCrossentropy()
         elif loss_label == "poisson_kl":
             loss_fn = metrics.PoissonKL(spec_weight)
-        elif loss_label == "mse_plus_pearsonr":
-            loss_fn = metrics.MSEPlusPearsonLoss()
         elif loss_label == "poisson_mn":
             loss_fn = metrics.PoissonMultinomial(
                 total_weight=total_weight,
                 weight_range=weight_range,
                 weight_exp=weight_exp,
             )
+        elif loss_label == "slope_regression_loss":
+            loss_fn = metrics.SlopeRegressionLoss(
+                reduction=tf.keras.losses.Reduction.NONE)
         else:
             loss_fn = tf.keras.losses.Poisson()
 
@@ -176,6 +177,9 @@ class Trainer:
                 ]
             else:
                 num_targets = model.output_shape[-1]
+                # Handle scalar output case where output_shape[-1] is None
+                if num_targets is None:
+                    num_targets = 1
                 model_metrics = [
                     metrics.PearsonR(num_targets),
                     metrics.R2(num_targets)
@@ -395,8 +399,16 @@ class Trainer:
                 with tf.GradientTape() as tape:
                     pred = seqnn_model.models[0](x, training=True)
                     loss_batch_len = self.loss_fn(y, pred)
-                    loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
-                    loss = tf.reduce_sum(loss_batch) / self.batch_size
+                    
+                    # Handle different loss function output dimensions
+                    if len(loss_batch_len.shape) == 0:
+                        # Scalar loss (already reduced)
+                        loss = loss_batch_len
+                    else:
+                        # Batch loss needs reduction
+                        loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
+                        loss = tf.reduce_sum(loss_batch) / self.batch_size
+                        
                     loss += tf.cast(
                         sum(seqnn_model.models[0].losses) / self.num_gpu,
                         loss.dtype)
@@ -435,8 +447,16 @@ class Trainer:
                     with tf.GradientTape() as tape:
                         pred = seqnn_model.models[1](x, training=True)
                         loss_batch_len = self.loss_fn(y, pred)
-                        loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
-                        loss = tf.reduce_sum(loss_batch) / self.batch_size
+                        
+                        # Handle different loss function output dimensions
+                        if len(loss_batch_len.shape) == 0:
+                            # Scalar loss (already reduced)
+                            loss = loss_batch_len
+                        else:
+                            # Batch loss needs reduction
+                            loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
+                            loss = tf.reduce_sum(loss_batch) / self.batch_size
+                            
                         loss += tf.cast(
                             sum(seqnn_model.models[1].losses) / self.num_gpu,
                             loss.dtype)
@@ -657,6 +677,9 @@ class Trainer:
 
         # metrics
         num_targets = model.output_shape[-1]
+        # Handle scalar output case where output_shape[-1] is None
+        if num_targets is None:
+            num_targets = 1
         train_loss = tf.keras.metrics.Mean(name="train_loss")
         train_r = metrics.PearsonR(num_targets, name="train_r")
         train_r2 = metrics.R2(num_targets, name="train_r2")
@@ -667,7 +690,6 @@ class Trainer:
         if self.strategy is None:
 
             if self.loss_scale:
-
                 @tf.function
                 def train_step(x, y):
                     with tf.GradientTape() as tape:
@@ -687,7 +709,6 @@ class Trainer:
                         zip(gradients, model.trainable_variables))
 
             else:
-
                 @tf.function
                 def train_step(x, y):
                     with tf.GradientTape() as tape:
@@ -722,8 +743,16 @@ class Trainer:
                 with tf.GradientTape() as tape:
                     pred = model(x, training=True)
                     loss_batch_len = self.loss_fn(y, pred)
-                    loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
-                    loss = tf.reduce_sum(loss_batch) / self.batch_size
+                    
+                    # Handle different loss function output dimensions
+                    if len(loss_batch_len.shape) == 0:
+                        # Scalar loss (already reduced)
+                        loss = loss_batch_len
+                    else:
+                        # Batch loss needs reduction
+                        loss_batch = tf.reduce_mean(loss_batch_len, axis=-1)
+                        loss = tf.reduce_sum(loss_batch) / self.batch_size
+                        
                     loss += tf.cast(
                         sum(model.losses) / self.num_gpu, loss.dtype)
                 train_r(y, pred)
@@ -960,7 +989,7 @@ class Trainer:
                 global_clipnorm=global_clipnorm,
                 epsilon=epsilon_value,
                 amsgrad=False,
-            )  # reduces performance in my experience
+            )
 
         elif optimizer_type == "adamw":
             self.optimizer = tf.keras.optimizers.AdamW(
@@ -971,7 +1000,7 @@ class Trainer:
                 clipnorm=clip_norm,
                 global_clipnorm=global_clipnorm,
                 amsgrad=False,
-            )  # reduces performance in my experience
+            )
 
         elif optimizer_type in ["sgd", "momentum"]:
             self.optimizer = tf.keras.optimizers.SGD(

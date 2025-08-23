@@ -13,6 +13,252 @@ for device in gpu_devices:
 ################################################################################
 # Losses
 ################################################################################
+
+class CombinedExpressionLoss(LossFunctionWrapper):
+    """Combined loss function for tissue expression prediction.
+    
+    Combines MSE, correlation loss, and KL divergence to better capture
+    relative expression patterns across tissues.
+    
+    Args:
+        mse_weight: Weight for the MSE loss component.
+        correlation_weight: Weight for the correlation loss component.
+        kl_weight: Weight for the KL divergence loss component.
+        contrastive_weight: Weight for the contrastive loss component.
+        contrastive_temp: Temperature parameter for contrastive loss.
+        epsilon: Small value to avoid numerical issues.
+        scale_gradients: Whether to scale gradients for stability.
+        simplified: Whether to use a simplified version of the loss.
+    """
+    
+    def __init__(
+        self,
+        mse_weight=0.7,
+        correlation_weight=0.2,
+        kl_weight=0.1,
+        contrastive_weight=0.0,  # Disabled by default as it can be unstable
+        contrastive_temp=0.1,
+        epsilon=1e-6,
+        scale_gradients=True,
+        simplified=False,
+        reduction=losses_utils.ReductionV2.AUTO,
+        name="combined_expression_loss",
+    ):
+        self.mse_weight = mse_weight
+        self.correlation_weight = correlation_weight
+        self.kl_weight = kl_weight
+        self.contrastive_weight = contrastive_weight
+        self.contrastive_temp = contrastive_temp
+        self.epsilon = epsilon
+        self.scale_gradients = scale_gradients
+        self.simplified = simplified
+        
+        combined_loss = lambda y_true, y_pred: self._combined_loss(y_true, y_pred)
+        super(CombinedExpressionLoss, self).__init__(combined_loss,
+                                                    name=name,
+                                                    reduction=reduction)
+    
+    def _combined_loss(self, y_true, y_pred):
+        # Apply gradient scaling for stability if requested
+        if self.scale_gradients:
+            y_pred = tf.stop_gradient(y_pred) + 0.1 * (y_pred - tf.stop_gradient(y_pred))
+        
+        # Ensure positive values for stability
+        y_true = tf.maximum(y_true, self.epsilon)
+        y_pred = tf.maximum(y_pred, self.epsilon)
+        
+        # MSE component
+        mse_loss = tf.keras.losses.mean_squared_error(y_true, y_pred)
+        
+        # Use simplified version if requested (only MSE + correlation)
+        if self.simplified:
+            # Correlation component (1 - Pearson correlation)
+            y_true_centered = y_true - tf.reduce_mean(y_true, axis=-1, keepdims=True)
+            y_pred_centered = y_pred - tf.reduce_mean(y_pred, axis=-1, keepdims=True)
+            
+            y_true_std = tf.sqrt(tf.reduce_sum(tf.square(y_true_centered), axis=-1) + self.epsilon)
+            y_pred_std = tf.sqrt(tf.reduce_sum(tf.square(y_pred_centered), axis=-1) + self.epsilon)
+            
+            correlation = tf.reduce_sum(y_true_centered * y_pred_centered, axis=-1) / (y_true_std * y_pred_std + self.epsilon)
+            correlation = tf.clip_by_value(correlation, -1.0 + self.epsilon, 1.0 - self.epsilon)
+            correlation_loss = 1.0 - correlation
+            
+            # Combine only MSE and correlation for stability
+            return self.mse_weight * mse_loss + self.correlation_weight * correlation_loss
+        
+        # Full version with all components
+        # Correlation component (1 - Pearson correlation)
+        y_true_centered = y_true - tf.reduce_mean(y_true, axis=-1, keepdims=True)
+        y_pred_centered = y_pred - tf.reduce_mean(y_pred, axis=-1, keepdims=True)
+        
+        y_true_std = tf.sqrt(tf.reduce_sum(tf.square(y_true_centered), axis=-1) + self.epsilon)
+        y_pred_std = tf.sqrt(tf.reduce_sum(tf.square(y_pred_centered), axis=-1) + self.epsilon)
+        
+        correlation = tf.reduce_sum(y_true_centered * y_pred_centered, axis=-1) / (y_true_std * y_pred_std + self.epsilon)
+        correlation = tf.clip_by_value(correlation, -1.0 + self.epsilon, 1.0 - self.epsilon)
+        correlation_loss = 1.0 - correlation
+        
+        # KL divergence component
+        # Add epsilon and normalize to sum to 1
+        y_true_norm = y_true + self.epsilon
+        y_pred_norm = y_pred + self.epsilon
+        
+        y_true_norm = y_true_norm / tf.reduce_sum(y_true_norm, axis=-1, keepdims=True)
+        y_pred_norm = y_pred_norm / tf.reduce_sum(y_pred_norm, axis=-1, keepdims=True)
+        
+        kl_loss = tf.reduce_sum(y_true_norm * tf.math.log(y_true_norm / y_pred_norm + self.epsilon), axis=-1)
+        kl_loss = tf.clip_by_value(kl_loss, 0.0, 10.0)  # Limit extreme values
+        
+        # Contrastive loss component only if weight > 0
+        contrastive_loss = 0.0
+        if self.contrastive_weight > 0:
+            # Normalize vectors for cosine similarity
+            y_true_norm = tf.nn.l2_normalize(y_true, axis=-1)
+            y_pred_norm = tf.nn.l2_normalize(y_pred, axis=-1)
+            
+            # Calculate similarity matrix
+            batch_size = tf.shape(y_true)[0]
+            similarity_matrix = tf.matmul(y_pred_norm, tf.transpose(y_true_norm))
+            
+            # Apply temperature scaling
+            similarity_matrix /= self.contrastive_temp
+            
+            # Create labels - diagonal elements are positive pairs
+            labels = tf.eye(batch_size)
+            
+            # Calculate contrastive loss (similar to NT-Xent loss)
+            contrastive_loss = tf.reduce_mean(
+                tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=similarity_matrix)
+            )
+            contrastive_loss = tf.clip_by_value(contrastive_loss, 0.0, 10.0)  # Limit extreme values
+        
+        # Combine all losses
+        combined = (
+            self.mse_weight * mse_loss + 
+            self.correlation_weight * correlation_loss + 
+            self.kl_weight * kl_loss +
+            self.contrastive_weight * contrastive_loss
+        )
+        
+        return combined
+
+
+class TissueRelationshipLoss(LossFunctionWrapper):
+    """Loss function that focuses on tissue expression relationships.
+    
+    This loss encourages the model to learn the relative expression patterns
+    between different tissues, which is important for capturing tissue-specific
+    expression profiles.
+    
+    Args:
+        tissue_graph: Optional adjacency matrix representing known tissue relationships.
+        alpha: Weight for the tissue relationship component.
+        epsilon: Small value to avoid numerical issues.
+        scale_gradients: Whether to scale gradients for stability.
+        mse_weight: Weight for the base MSE component.
+        relationship_weight: Weight for the tissue relationship component.
+        rank_weight: Weight for the rank correlation component.
+        use_rank_correlation: Whether to include rank correlation in the loss.
+    """
+    
+    def __init__(
+        self,
+        tissue_graph=None,
+        alpha=0.5,
+        epsilon=1e-6,
+        scale_gradients=True,
+        mse_weight=0.6,
+        relationship_weight=0.3,
+        rank_weight=0.1,
+        use_rank_correlation=True,
+        reduction=losses_utils.ReductionV2.AUTO,
+        name="tissue_relationship_loss",
+    ):
+        self.tissue_graph = tissue_graph
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.scale_gradients = scale_gradients
+        self.mse_weight = mse_weight
+        self.relationship_weight = relationship_weight
+        self.rank_weight = rank_weight
+        self.use_rank_correlation = use_rank_correlation
+        
+        tissue_loss = lambda y_true, y_pred: self._tissue_loss(y_true, y_pred)
+        super(TissueRelationshipLoss, self).__init__(tissue_loss,
+                                                    name=name,
+                                                    reduction=reduction)
+    
+    def _tissue_loss(self, y_true, y_pred):
+        # Apply gradient scaling for stability if requested
+        if self.scale_gradients:
+            y_pred = tf.stop_gradient(y_pred) + 0.1 * (y_pred - tf.stop_gradient(y_pred))
+        
+        # Ensure positive values for stability
+        y_true = tf.maximum(y_true, self.epsilon)
+        y_pred = tf.maximum(y_pred, self.epsilon)
+        
+        # Base MSE loss
+        mse_loss = tf.keras.losses.mean_squared_error(y_true, y_pred)
+        
+        # Calculate tissue relationship matrix for true values
+        # Higher values indicate more similar expression patterns
+        num_tissues = tf.shape(y_true)[-1]
+        
+        # Create tissue relationship matrices
+        # For each sample, compute pairwise differences between tissues
+        y_true_expanded_1 = tf.expand_dims(y_true, axis=-1)  # [batch, tissues, 1]
+        y_true_expanded_2 = tf.expand_dims(y_true, axis=-2)  # [batch, 1, tissues]
+        
+        # Calculate true tissue relationships (differences)
+        true_tissue_rel = tf.abs(y_true_expanded_1 - y_true_expanded_2)  # [batch, tissues, tissues]
+        
+        # Same for predictions
+        y_pred_expanded_1 = tf.expand_dims(y_pred, axis=-1)
+        y_pred_expanded_2 = tf.expand_dims(y_pred, axis=-2)
+        pred_tissue_rel = tf.abs(y_pred_expanded_1 - y_pred_expanded_2)
+        
+        # Calculate the loss on tissue relationships
+        relationship_loss = tf.reduce_mean(tf.square(true_tissue_rel - pred_tissue_rel))
+        
+        # If we have a tissue graph, use it to weight the relationships
+        if self.tissue_graph is not None:
+            # tissue_graph should be a tensor of shape [num_tissues, num_tissues]
+            # with values indicating the strength of relationship
+            weighted_rel_loss = tf.reduce_mean(
+                tf.multiply(tf.square(true_tissue_rel - pred_tissue_rel), self.tissue_graph)
+            )
+            relationship_loss = weighted_rel_loss
+        
+        # Add rank correlation component if requested
+        rank_loss = 0.0
+        if self.use_rank_correlation:
+            # Calculate rank correlations between tissues
+            # This helps preserve the ordering of expression levels across tissues
+            
+            # Create rank matrices (approximate using softmax-based sorting)
+            def soft_rank(x):
+                # Softmax-based differentiable ranking
+                # Higher values get higher ranks
+                x_softmax = tf.nn.softmax(x * 10, axis=-1)  # Scale for sharper softmax
+                return tf.cumsum(x_softmax, axis=-1)
+            
+            # Get approximate ranks
+            y_true_ranks = soft_rank(y_true)
+            y_pred_ranks = soft_rank(y_pred)
+            
+            # Calculate rank correlation loss (simplified Spearman)
+            rank_loss = tf.reduce_mean(tf.square(y_true_ranks - y_pred_ranks))
+        
+        # Combine losses with weights
+        combined_loss = (
+            self.mse_weight * mse_loss + 
+            self.relationship_weight * relationship_loss + 
+            self.rank_weight * rank_loss
+        )
+        
+        return combined_loss
+
+
 def mean_squared_error_udot(y_true, y_pred, udot_weight: float = 1):
     """Mean squared error with mean-normalized specificity term.
 
@@ -115,30 +361,8 @@ def poisson_multinomial(
         epsilon (float): Added small value to avoid log(0).
         rescale (bool): Rescale loss after re-weighting.
     """
-    # 检查输入形状，支持2d_to_1d模型类型
-    if len(y_true.shape) == 2:  # 2d_to_1d模型类型 [batch, targets]
-        # 对于2d_to_1d模型，直接使用poisson损失
-        poisson_term = poisson(y_true, y_pred)  # B x T
-        
-        # 添加epsilon以避免log(0)
-        y_true_safe = y_true + epsilon
-        y_pred_safe = y_pred + epsilon
-        
-        # 计算KL散度作为替代的multinomial项
-        kl_term = y_true_safe * (tf.math.log(y_true_safe) - tf.math.log(y_pred_safe))
-        kl_term = tf.reduce_mean(kl_term, axis=-1, keepdims=True)  # B x 1
-        
-        # 组合损失
-        loss_raw = poisson_term + total_weight * kl_term  # B x T
-        
-        if rescale:
-            loss_rescale = loss_raw * 2 / (1 + total_weight)
-        else:
-            loss_rescale = loss_raw
-        
-        return loss_rescale
-    
-    # 原始的2d_to_2d实现
+    if len(y_true.shape) == 1:
+        raise ValueError("poisson_multinomial is not suitable for predicting 1d output, change to mse loss")
     seq_len = y_true.shape[1]
 
     if weight_range < 1:
@@ -209,7 +433,6 @@ class PoissonMultinomial(LossFunctionWrapper):
         super(PoissonMultinomial, self).__init__(pois_mn,
                                                  name=name,
                                                  reduction=reduction)
-
 
 ################################################################################
 # Metrics
@@ -386,7 +609,10 @@ class PearsonR(tf.keras.metrics.Metric):
     def __init__(self, num_targets, summarize=True, name="pearsonr", **kwargs):
         super(PearsonR, self).__init__(name=name, **kwargs)
         self._summarize = summarize
-        self._shape = (num_targets, )
+        if num_targets == 1:
+            self._shape = () # scalar output
+        else:
+            self._shape = (num_targets, )
         self._count = self.add_weight(name="count",
                                       shape=self._shape,
                                       initializer="zeros")
@@ -413,6 +639,8 @@ class PearsonR(tf.keras.metrics.Metric):
         y_pred = tf.cast(y_pred, "float32")
 
         if len(y_true.shape) == 2:
+            reduce_axes = 0
+        elif len(y_true.shape) == 1:
             reduce_axes = 0
         else:
             reduce_axes = [0, 1]
@@ -478,7 +706,10 @@ class R2(tf.keras.metrics.Metric):
     def __init__(self, num_targets, summarize=True, name="r2", **kwargs):
         super(R2, self).__init__(name=name, **kwargs)
         self._summarize = summarize
-        self._shape = (num_targets, )
+        if num_targets == 1:
+            self._shape = () # scalar output
+        else:
+            self._shape = (num_targets, )
         self._count = self.add_weight(name="count",
                                       shape=self._shape,
                                       initializer="zeros")
@@ -502,7 +733,9 @@ class R2(tf.keras.metrics.Metric):
         y_true = tf.cast(y_true, "float32")
         y_pred = tf.cast(y_pred, "float32")
 
-        if len(y_true.shape) == 2:
+        if len(y_true.shape) == 1:
+            reduce_axes = 0
+        elif len(y_true.shape) == 2:
             reduce_axes = 0
         else:
             reduce_axes = [0, 1]
@@ -522,20 +755,22 @@ class R2(tf.keras.metrics.Metric):
         count = tf.ones_like(y_true)
         count = tf.reduce_sum(count, axis=reduce_axes)
         self._count.assign_add(count)
-
+        
     def result(self):
         """Compute R2 result from state."""
         true_mean = tf.divide(self._true_sum, self._count)
         true_mean2 = tf.math.square(true_mean)
 
         total = self._true_sumsq - tf.multiply(self._count, true_mean2)
-        
+        total = tf.where(tf.greater(total, 1e-12), total, np.inf * tf.ones_like(total))
+
         resid1 = self._pred_sumsq
         resid2 = -2 * self._product
         resid3 = self._true_sumsq
         resid = resid1 + resid2 + resid3
+        resid = tf.maximum(resid, 0.0) # add
 
-        r2 = tf.ones_like(self._shape, dtype=tf.float32) - tf.divide(resid, total)
+        r2 = 1.0 - tf.divide(resid, total)
 
         if self._summarize:
             return tf.reduce_mean(r2)

@@ -17,6 +17,64 @@ from paddy import layers
 from paddy import adapters
 
 
+def apply_transfer_mode(seqnn_model, transfer_mode, verbose=False):
+    """
+    Apply transfer learning mode to model.
+    
+    Args:
+        seqnn_model: The model to apply transfer learning to
+        transfer_mode: One of "linear", "full", or "adapter"
+        verbose: Whether to print detailed information
+    """
+    if verbose:
+        print(f"Applying transfer learning mode: {transfer_mode}")
+    
+    if transfer_mode == "linear":
+        # Linear mode: Freeze trunk, only train head
+        if verbose:
+            print("=== Linear Transfer Learning Mode ===")
+        if hasattr(seqnn_model, 'model_trunk'):
+            seqnn_model.model_trunk.trainable = False
+            if verbose:
+                print("✓ Trunk weights frozen")
+        elif hasattr(seqnn_model, 'freeze_trunk'):
+            seqnn_model.freeze_trunk()
+            if verbose:
+                print("✓ Trunk weights frozen via freeze_trunk method")
+
+    elif transfer_mode == "full":
+        # Full mode: All weights trainable
+        if verbose:
+            print("=== Full Fine-tuning Mode ===")
+        if hasattr(seqnn_model, 'model_trunk'):
+            seqnn_model.model_trunk.trainable = True
+            if verbose:
+                print("✓ All weights trainable")
+        elif hasattr(seqnn_model, 'unfreeze_trunk'):
+            seqnn_model.unfreeze_trunk()
+            if verbose:
+                print("✓ All weights trainable via unfreeze_trunk method")
+
+    elif transfer_mode == "adapter":
+        # Adapter mode: Only adapter layers trainable
+        if verbose:
+            print("=== Adapter Mode ===") 
+        if hasattr(seqnn_model, 'model_trunk'):
+            seqnn_model.model_trunk.trainable = False
+            if verbose:
+                print("✓ Trunk weights frozen for adapter mode")
+        elif hasattr(seqnn_model, 'freeze_trunk'):
+            seqnn_model.freeze_trunk()
+            if verbose:
+                print("✓ Trunk weights frozen via freeze_trunk method")
+    
+    else:
+        raise ValueError(f"Unknown transfer mode: {transfer_mode}. Must be one of 'linear', 'full', or 'adapter'")
+
+
+
+
+
 def param_count(layer, type="all"):
     if type not in ["all", "trainable", "non_trainable"]:
         raise ValueError("TYPE must be one of all, trainable, non_trainable")

@@ -15,6 +15,11 @@ from paddy import seqnn
 from paddy import dna
 import re
 import pysam
+import time
+import gc
+from paddy.utils import plot_ism_effects
+
+
 
 
 def parse_args():
@@ -25,18 +30,6 @@ def parse_args():
         type=str,
         required=True,
         help="Trained model HDF5 file or directory containing multiple seed models e.g. seed100_model_best.h5")
-    parser.add_argument(
-        "-f",
-        "--fasta_file",
-        type=str,
-        required=True,
-        help="Reference genome in FASTA format")
-    parser.add_argument(
-        "-b",
-        "--bed_file",
-        type=str,
-        required=True,
-        help="BED file with sequence coordinates to predict")
     parser.add_argument(
         "--params_file",
         type=str,
@@ -74,7 +67,41 @@ def parse_args():
         type=str,
         default="fasta_out",
         help="Directory to save FASTA files [Default: fasta_out]")
-    return parser.parse_args()
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Generate expression plots [Default: False]")
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=32,
+        help="Number of sequences to process in each prediction batch for memory efficiency [Default: 100]")
+    # Create mutually exclusive group for input options
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
+        "-ref",
+        "--reference_fasta",
+        type=str,
+        help="Reference genome in FASTA format (required when using -b/--bed_file)")
+    input_group.add_argument(
+        "-i",
+        "--input_fasta",
+        type=str,
+        help="Input In-silico-mutated FASTA file with sequences to predict directly (no BED file required)")
+    
+    # Make bed_file optional
+    parser.add_argument(
+        "-b",
+        "--bed_file",
+        type=str,
+        help="BED file with sequence coordinates to predict (required when using -ref/--reference_fasta)")
+    
+    args = parser.parse_args()
+    
+    if args.reference_fasta and not args.bed_file:
+        parser.error("When using -ref/--reference_fasta, you must also provide -b/--bed_file")
+    
+    return args
 
 
 def get_model_files(model_path):
@@ -95,7 +122,7 @@ def get_model_files(model_path):
                 try:
                     seed_num = int(filename[4:].split('_')[0]) # e.g. seed100_model_best.h5 -> 100
                 except ValueError:
-                    print(f"Warning: Could not parse seed number from {filename}, using default")
+                    print(f"Warning: Could not parse seed number from {filename}, using index as fallback")
                     seed_num = len(seed_files)  # Use index as fallback
             else:
                 seed_num = len(seed_files)  # Use index as fallback
@@ -130,6 +157,48 @@ def read_bed_file(bed_file):
     
     if not sequences:
         raise ValueError(f"No valid sequences found in {bed_file}")
+    
+    return sequences
+
+
+def read_fasta_file(fasta_file, seq_length):
+    """Read sequences directly from FASTA file."""
+    sequences = []
+    seq_id = None
+    seq_dna = ""
+    
+    with open(fasta_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+                
+            if line.startswith('>'):
+                # Save the previous sequence if there was one
+                if seq_id is not None and seq_dna:
+                    sequences.append((seq_id, seq_dna))
+                    seq_dna = ""
+                
+                # Extract sequence ID from header line
+                seq_id = line[1:].split()[0]  # Remove '>' and take first part as ID
+            else:
+                # Append sequence data
+                seq_dna += line
+        
+        # Add the last sequence
+        if seq_id is not None and seq_dna:
+            sequences.append((seq_id, seq_dna))
+    
+    if not sequences:
+        raise ValueError(f"No valid sequences found in {fasta_file}")
+    
+    print(f"Found {len(sequences)} sequences in FASTA file")
+    
+    # Check sequence lengths and warn if they don't match expected length
+    for seq_id, seq_dna in sequences:
+        if len(seq_dna) != seq_length:
+            print(f"Warning: Sequence {seq_id} length ({len(seq_dna)}) doesn't match model input size ({seq_length}).", file=sys.stderr)
+            print(f"Sequence will be padded or truncated to match required length.", file=sys.stderr)
     
     return sequences
 
@@ -183,12 +252,47 @@ def fetch_dna(fasta_open, chrm, start, end, seq_idx=None, name=None, save_fasta=
     return seq_dna
 
 
-def plot_tissue_expression(seq_id, predictions, tissue_names, output_dir):
+def process_sequence(seq_dna, seq_length):
+    """Process a DNA sequence to ensure it matches the required length."""
+    # Truncate or pad sequence to match required length
+    if len(seq_dna) > seq_length:
+        # Truncate from the center to preserve both ends
+        excess = len(seq_dna) - seq_length
+        start_cut = excess // 2
+        seq_dna = seq_dna[start_cut:start_cut+seq_length]
+    elif len(seq_dna) < seq_length:
+        # Pad with N's to reach required length
+        padding_needed = seq_length - len(seq_dna)
+        # Add padding equally to both sides
+        left_pad = padding_needed // 2
+        right_pad = padding_needed - left_pad
+        seq_dna = 'N' * left_pad + seq_dna + 'N' * right_pad
+    
+    return seq_dna
+
+
+def save_sequence_to_fasta(seq_id, seq_dna, fasta_dir):
+    """Save a sequence to a FASTA file."""
+    os.makedirs(fasta_dir, exist_ok=True)
+    filename = f"{seq_id}.fa"
+    filepath = os.path.join(fasta_dir, filename)
+    
+    with open(filepath, 'w') as f:
+        f.write(f">{seq_id}\n")
+        # Write sequence with line breaks every 60 characters
+        for i in range(0, len(seq_dna), 60):
+            f.write(f"{seq_dna[i:i+60]}\n")
+    
+    return filepath
+
+
+def plot_tissue_expression(seq_id, predictions, tissue_names, output_dir, chrom_pos=None):
     """
     Plot prediction values for a sequence across tissues.
     X-axis: tissues
     Y-axis: predicted expression level
     Different lines = different seeds
+    chrom_pos: optional chromosome position in format "chrom:start-end"
     """
     pattern = re.compile(r'tissue_(\d+)_seed_(\d+)')
     tissue_seed_map = {}
@@ -238,7 +342,12 @@ def plot_tissue_expression(seq_id, predictions, tissue_names, output_dir):
     plt.xticks(ticks=x_indices, labels=x_labels, rotation=45, ha='right')
     plt.ylabel("Predicted Expression")
     plt.xlabel("Tissue")
-    plt.title(f"Sequence: {seq_id} — Expression Prediction Across Tissues")
+    
+    if chrom_pos:
+        plt.title(f"Sequence: {seq_id}\nPosition: {chrom_pos} — Expression Prediction Across Tissues")
+    else:
+        plt.title(f"Sequence: {seq_id} — Expression Prediction Across Tissues")
+        
     plt.legend(title="Seed", bbox_to_anchor=(1.02, 1), loc='upper left')
     plt.tight_layout()
 
@@ -248,8 +357,67 @@ def plot_tissue_expression(seq_id, predictions, tissue_names, output_dir):
     plt.close()
 
 
+def prepare_sequences_from_fasta(input_fasta, seq_length, save_fasta=False, fasta_dir=None):
+    """Prepare sequences from a FASTA file."""
+    print(f"Reading sequences directly from FASTA file: {input_fasta}")
+    fasta_sequences = read_fasta_file(input_fasta, seq_length)
+    
+    processed_sequences = []
+    for seq_idx, (seq_id, seq_dna) in enumerate(fasta_sequences):
+        # Process the sequence to ensure correct length
+        seq_dna = process_sequence(seq_dna, seq_length)
+        
+        # Save to FASTA file if requested
+        if save_fasta:
+            filepath = save_sequence_to_fasta(seq_id, seq_dna, fasta_dir)
+            print(f"Saved sequence to {filepath}")
+        
+        processed_sequences.append((seq_id, seq_dna))
+    
+    return processed_sequences
+
+
+def prepare_sequences_from_bed(bed_file, reference_fasta, seq_length, save_fasta=False, fasta_dir=None):
+    """Prepare sequences from a BED file and reference genome."""
+    sequences = read_bed_file(bed_file)
+    print(f"Found {len(sequences)} sequences in BED file")
+    
+    processed_sequences = []
+    fasta_open = pysam.Fastafile(reference_fasta)
+    
+    for seq_idx, (seq_id, chrom, start, end) in enumerate(sequences):
+        coord_length = end - start
+        
+        # Check if coordinates match expected sequence length
+        if coord_length != seq_length:
+            print(f"Warning: Sequence length from coordinates ({coord_length}) doesn't match model input size ({seq_length}).", file=sys.stderr)
+            print(f"Note that bed file coordinates are 0-based. ", file=sys.stderr)
+            print(f"Fetching sequence from {chrom}:{start}-{end}. Regions beyond chromosome bounds will be padded with 'N' bases.", file=sys.stderr)
+        
+        # Fetch DNA sequence
+        seq_dna = fetch_dna(
+            fasta_open, 
+            chrom, 
+            start, 
+            end, 
+            seq_idx=seq_idx,
+            name=seq_id, 
+            save_fasta=save_fasta, 
+            fasta_dir=fasta_dir
+        )
+        
+        # Store the genomic position along with the sequence
+        chrom_pos = f"{chrom}:{start}-{end}"
+        processed_sequences.append((seq_id, seq_dna, chrom_pos))
+    
+    # Close reference genome
+    fasta_open.close()
+    
+    return processed_sequences
+
 def main():
     args = parse_args()
+    start_time = time.time()
 
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -267,78 +435,130 @@ def main():
 
     seed_model_bool, model_files = get_model_files(args.model_file)
 
-    sequences = read_bed_file(args.bed_file)
-    print(f"Found {len(sequences)} sequences in BED file")
-
     seq_length = args.seq_length
-    if not seq_length:
-        seq_length = params["model"].get("seq_length", 32768)
+    if seq_length is None:
+        seq_length = params["model"].get("seq_length", None)
+        if seq_length is None:
+            raise ValueError("Sequence length must be provided either as an argument or in the parameters file")
     
-    all_predictions = {}
-    for seq_id, _, _, _ in sequences:
-        all_predictions[seq_id] = {'sequenceID': seq_id}
-
-    fasta_open = pysam.Fastafile(args.fasta_file)
-
-    for seq_idx, (seq_id, chrom, start, end) in enumerate(sequences):
-        print(f"\nProcessing sequence {seq_idx+1}/{len(sequences)}: {seq_id} ({chrom}:{start}-{end})")
-        
-        coord_length = end - start
-        
-        # Check if coordinates match expected sequence length
-        if coord_length != seq_length:
-            print(f"Warning: Sequence length from coordinates ({coord_length}) doesn't match model input size ({seq_length}).", file=sys.stderr)
-            print(f"Will fetch sequence from {chrom}:{start}-{end} and adjust as needed.", file=sys.stderr)
-        
-        # Fetch DNA sequence
-        seq_dna = fetch_dna(
-            fasta_open, 
-            chrom, 
-            start, 
-            end, 
-            seq_idx=seq_idx,
-            name=seq_id, 
+    # Prepare sequences based on input mode
+    if args.input_fasta:
+        # Direct FASTA input mode
+        sequences = prepare_sequences_from_fasta(
+            args.input_fasta, 
+            seq_length, 
             save_fasta=args.save_fasta, 
             fasta_dir=args.fasta_dir
         )
-        
-        # Convert to one-hot encoding using paddy.dna module
-        seq_1hot = dna.dna_1hot(seq_dna, seq_len=seq_length)
-        
-        # Add batch dimension
-        seq_1hot = np.expand_dims(seq_1hot, axis=0)
-        
-        # Run predictions for each model
-        for model_idx, (seed_num, model_file) in enumerate(model_files):
-            print(f"Loading model {model_idx+1}/{len(model_files)} (seed {seed_num}): {os.path.basename(model_file)}")
-            
-            # Initialize model
-            params["model"]["verbose"] = False
-            seqnn_model = seqnn.SeqNN(params["model"])
-            seqnn_model.restore(model_file, args.head_i)
-            
-            # Make prediction
-            print("Making prediction...")
-            pred = seqnn_model(seq_1hot)[0]
-            
-            # Add expression values for this model
-            if len(pred.shape) > 0:
-                # Multi-tissue prediction
-                feature_count = pred.shape[0]
-                for k in range(feature_count):
-                    col_name = f'tissue_{k}_seed_{seed_num}'
-                    all_predictions[seq_id][col_name] = float(pred[k])
-            else:
-                # Single value prediction
-                col_name = f'expression_seed_{seed_num}'
-                all_predictions[seq_id][col_name] = float(pred)
-            
-            # Clear model to free memory
-            del seqnn_model
-            tf.keras.backend.clear_session()
+    else:
+        # BED + reference genome mode
+        sequences = prepare_sequences_from_bed(
+            args.bed_file, 
+            args.reference_fasta, 
+            seq_length, 
+            save_fasta=args.save_fasta, 
+            fasta_dir=args.fasta_dir
+        )
     
-    # Close reference genome
-    fasta_open.close()
+    # Initialize predictions dictionary
+    all_predictions = {}
+    seq_positions = {}
+    
+    # Check if sequences contain position information (from BED file)
+    has_positions = len(sequences[0]) > 2 if sequences else False
+    
+    for seq_data in sequences:
+        if has_positions:
+            seq_id, _, chrom_pos = seq_data
+            seq_positions[seq_id] = chrom_pos
+        else:
+            seq_id, _ = seq_data
+            
+        all_predictions[seq_id] = {'sequenceID': seq_id}
+    
+    # Print batch size information
+    print(f"Using batch size of {args.batch_size} for prediction")
+    
+    # Configure GPU memory growth
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"Found {len(gpus)} GPU(s)")
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+                print(f"Enabled memory growth for {gpu.name}")
+            except RuntimeError as e:
+                print(f"Error setting memory growth: {e}")
+    else:
+        print("No GPUs available, using CPU")
+    
+    # Process each model
+    for model_idx, (seed_num, model_file) in enumerate(model_files):
+        print(f"\nLoading model {model_idx+1}/{len(model_files)} (seed {seed_num}): {os.path.basename(model_file)}")
+        
+        # Initialize model
+        params["model"]["verbose"] = False
+        seqnn_model = seqnn.SeqNN(params["model"])
+        seqnn_model.restore(model_file, args.head_i)
+        
+        # Prepare sequences for batch processing
+        batch_size = args.batch_size
+        num_batches = (len(sequences) + batch_size - 1) // batch_size  # Ceiling division
+        
+        print(f"Processing {len(sequences)} sequences in {num_batches} batches")
+        
+        # Process sequences in batches
+        for batch_idx in tqdm(range(num_batches), desc=f"Predicting with model {seed_num}"):
+            start_idx = batch_idx * batch_size
+            end_idx = min((batch_idx + 1) * batch_size, len(sequences))
+            batch_sequences = sequences[start_idx:end_idx]
+            
+            # Prepare batch data
+            batch_seq_ids = []
+            batch_1hot = []
+            
+            # Convert sequences to one-hot encoding
+            for seq_data in batch_sequences:
+                if has_positions:
+                    seq_id, seq_dna, _ = seq_data
+                else:
+                    seq_id, seq_dna = seq_data
+                
+                # Process the sequence to ensure correct length
+                seq_dna = process_sequence(seq_dna, seq_length)
+                
+                # Convert to one-hot encoding
+                seq_1hot = dna.dna_1hot(seq_dna, seq_len=seq_length)
+                
+                batch_seq_ids.append(seq_id)
+                batch_1hot.append(seq_1hot)
+            
+            # Convert to numpy array
+            batch_1hot = np.array(batch_1hot)
+            
+            # Make predictions for the entire batch
+            batch_preds = seqnn_model(batch_1hot)
+            
+            # Store predictions
+            for i, seq_id in enumerate(batch_seq_ids):
+                pred = batch_preds[i]
+                
+                # Add expression values for this model
+                if len(pred.shape) > 0:
+                    # Multi-tissue prediction
+                    feature_count = pred.shape[0]
+                    for k in range(feature_count):
+                        col_name = f'tissue_{k}_seed_{seed_num}'
+                        all_predictions[seq_id][col_name] = float(pred[k])
+                else:
+                    # Single value prediction
+                    col_name = f'expression_seed_{seed_num}'
+                    all_predictions[seq_id][col_name] = float(pred)
+        
+        # Clear model to free memory
+        del seqnn_model
+        tf.keras.backend.clear_session()
+        gc.collect()  # Explicit garbage collection
     
     # Calculate mean and std for each tissue across seeds
     print("\nCalculating statistics across seeds...")
@@ -357,15 +577,7 @@ def main():
                 pred_dict[f"{base_tissue}_mean"] = np.mean(seed_values)
                 pred_dict[f"{base_tissue}_std"] = np.std(seed_values)
     
-    # Generate plots
-    print("\nGenerating expression plots...")
-    if seed_model_bool:
-        for seq_id in tqdm(all_predictions):
-            plot_tissue_expression(seq_id, all_predictions[seq_id], tissue_names, args.output_dir)
-    
-    # Convert to DataFrame and save
-    print(f"\nSaving results to {os.path.join(args.output_dir, 'predictions.tsv')}")
-    
+
     df = pd.DataFrame(list(all_predictions.values()))
     
     # Reorder columns: sequenceID, mean/std columns, individual seed columns
@@ -382,12 +594,39 @@ def main():
         df = df[["sequenceID"] + mean_cols].rename(columns=rename_dict)
     
     df.to_csv(os.path.join(args.output_dir, 'predictions.tsv'), sep='\t', index=False)
+    print(f"\nSaving results to {os.path.join(args.output_dir, 'predictions.tsv')}")
+
+    # Generate plots
+    assigned_ref = args.reference_fasta is not None
+    assigned_ism = args.input_fasta is not None
+
+    if args.plot & assigned_ref:
+        print("\nGenerating expression plots...")
+        if seed_model_bool:
+            for seq_id in tqdm(all_predictions):
+                chrom_pos = seq_positions.get(seq_id, None)
+                plot_tissue_expression(seq_id, all_predictions[seq_id], tissue_names, args.output_dir, chrom_pos)
+        else:
+            print("No seed models detected, skipping plot generation")
+    
+    if args.plot & assigned_ism:
+        print("\n Generating ISM-style plots...")
+        plot_ism_effects(
+            os.path.join(args.output_dir, 'predictions.tsv'), 
+            tissue_index=12, 
+            title="ISM", 
+            save_path=os.path.join(args.output_dir, "ism.png")
+        )
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
     
     print(f"Saved predictions for {len(df)} sequences.")
     print(f"Results and plots saved in: {args.output_dir}")
+    print(f"Total execution time: {elapsed_time:.2f} seconds")
     
     if args.save_fasta:
-        print(f"Saving FASTA files to dir: {args.fasta_dir}")
+        print(f"FASTA files saved to dir: {args.fasta_dir}")
 
 
 if __name__ == "__main__":

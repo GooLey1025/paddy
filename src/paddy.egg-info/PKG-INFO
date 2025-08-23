@@ -20,6 +20,8 @@ Requires-Dist: matplotlib
 Requires-Dist: tensorboard
 Requires-Dist: scikit-learn
 Requires-Dist: openpyxl
+Requires-Dist: umap-learn
+Requires-Dist: seaborn
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: black; extra == "dev"
