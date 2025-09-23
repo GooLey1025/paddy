@@ -22,27 +22,23 @@ import matplotlib.pyplot as plt
 from scipy.stats import mannwhitneyu
 
 class MotifAnalysisPipeline:
-    def __init__(self, tissue_indices: List[int], grads_dir: str, data_dir: str, output_dir: str, evalue_thresh: float = 0.1, tissues_dict: str = None):
+    def __init__(self, tissue_indices: List[int], grads_dir: str, data_dir: str, output_dir: str, evalue_thresh: float = 0.1, window_size: int = None, up_size: int = None, down_size: int = None):
         self.tissue_indices = [int(ti) for ti in tissue_indices.split(",")]
         self.grads_dir = grads_dir
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.evalue_thresh = evalue_thresh
-        self.tissues_dict = tissues_dict
+        self.window_size = window_size
+        self.up_size = up_size
+        self.down_size = down_size
+        
         # Discover tomtom XML files under the provided directory
         self.tomtom_xml_files = []
         for ti in self.tissue_indices:
-            tissue_dir = os.path.join(self.data_dir, f"tissue_{ti}")
+            tissue_dir = os.path.join(self.data_dir, f"tomtom_tissue_{ti}")
             tomtom_file = os.path.join(tissue_dir, "tomtom.xml")
             if os.path.isdir(tissue_dir) and os.path.exists(tomtom_file):
                 self.tomtom_xml_files.append(tomtom_file)
-        
-        # Tissue name mapping
-        if tissues_dict is not None:
-            with open(tissues_dict, "r") as f:
-                self.tissue_names = json.load(f)
-        else:
-            self.tissue_names = {ti: f"Tissue_{ti}" for ti in self.tissue_indices}
         
         # Data storage
         self.tomtom_matches = None
@@ -50,52 +46,164 @@ class MotifAnalysisPipeline:
         self.tissue_saliency_scores = None
     
         os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Log window configuration
+        if self.window_size is not None:
+            if self.up_size is not None or self.down_size is not None:
+                up_val = self.up_size if self.up_size is not None else 0
+                down_val = self.down_size if self.down_size is not None else 0
+                output_window_size = up_val + down_val
+                print(f"Windowed preprocessing detected:")
+                print(f"  - Center size: {self.window_size} bp")
+                print(f"  - Output window: {output_window_size} bp (up={up_val}, down={down_val})")
+                print(f"  - Will convert seqlet coordinates from output-window relative to absolute grads coordinates")
+            else:
+                print(f"Window size specified: {self.window_size} bp - will convert seqlet coordinates from center-window relative to absolute")
+        else:
+            print("No window size specified - using seqlet coordinates as-is (assumed to be absolute)")
 
-    def align_ppms(self, query_ppm: List[List[float]], target_ppm: List[List[float]], offset: int) -> Tuple[List[List[float]], List[List[float]]]:
+    def convert_seqlet_coordinates(self, start: int, end: int, grads_length: int) -> Tuple[int, int]:
         """
-        Align query and target PPMs based on offset to ensure they have the same length.
+        Convert seqlet coordinates from window-relative to absolute coordinates in grads file.
+        
+        When using windowed preprocessing with up_size/down_size:
+        - seqlets start/end are relative to the output window (up_size + down_size)
+        - need to convert first to center window coordinates, then to absolute positions
+        
+        When using windowed modiscolite without up_size/down_size:
+        - seqlets start/end are relative to the center window
+        - need to convert to absolute positions in the full grads sequence
+        
+        Args:
+            start: Start position relative to output/center window
+            end: End position relative to output/center window
+            grads_length: Total length of sequence in grads file
+            
+        Returns:
+            Tuple of (absolute_start, absolute_end) in grads coordinates
+        """
+        if self.window_size is None:
+            # No window size specified, return coordinates as-is
+            return start, end
+        
+        # Calculate center of the full sequence
+        grads_center = grads_length // 2
+        
+        # Two-stage conversion if up_size/down_size are specified
+        if self.up_size is not None or self.down_size is not None:
+            up_val = self.up_size if self.up_size is not None else 0
+            down_val = self.down_size if self.down_size is not None else 0
+            
+            # Stage 1: Convert from output window coordinates to center window coordinates
+            # The output window was extracted from the center of the center_size window
+            center_window_half = self.window_size // 2
+            output_window_center_in_center = center_window_half  # Output window is centered in center window
+            
+            # Convert from output window coordinates to center window coordinates
+            center_start = output_window_center_in_center - up_val + start
+            center_end = output_window_center_in_center - up_val + end
+            
+            # Stage 2: Convert from center window coordinates to absolute grads coordinates
+            center_window_start_in_grads = grads_center - center_window_half
+            absolute_start = center_window_start_in_grads + center_start
+            absolute_end = center_window_start_in_grads + center_end
+            
+        else:
+            # Original logic: seqlets are relative to center window
+            half_window = self.window_size // 2
+            absolute_start = grads_center - half_window + start
+            absolute_end = grads_center - half_window + end
+        
+        # Ensure coordinates are within bounds
+        absolute_start = max(0, absolute_start)
+        absolute_end = min(grads_length, absolute_end)
+        
+        # Debug logging for first few conversions
+        if hasattr(self, '_conversion_count'):
+            self._conversion_count += 1
+        else:
+            self._conversion_count = 1
+            
+        if self._conversion_count <= 5:  # Log first 5 conversions
+            if self.up_size is not None or self.down_size is not None:
+                up_val = self.up_size if self.up_size is not None else 0
+                down_val = self.down_size if self.down_size is not None else 0
+                print(f"  Coordinate conversion {self._conversion_count}: output_window({start},{end}) -> absolute({absolute_start},{absolute_end})")
+                print(f"    [grads_length={grads_length}, center_size={self.window_size}, up={up_val}, down={down_val}]")
+            else:
+                print(f"  Coordinate conversion {self._conversion_count}: center_window({start},{end}) -> absolute({absolute_start},{absolute_end})")
+                print(f"    [grads_length={grads_length}, center_size={self.window_size}]")
+        
+        return absolute_start, absolute_end
+
+    def align_ppms(self, query_ppm: List[List[float]], target_ppm: List[List[float]], offset: int, rc: bool = False) -> Tuple[List[List[float]], List[List[float]]]:
+        """
+        Align query and target PPMs based on offset and reverse complement logic.
+        
+        Logic according to user specification:
+        - If rc=True, reverse complement the target first
+        - Offset is relative to the (potentially reverse complemented) target:
+          * Negative offset: query has extra bases at beginning that should be removed
+          * Positive offset: query needs padding at beginning to align with target
+        - Trim both sequences to shortest length after alignment
+        
+        Examples:
+        - offset=-11, rc=False: query's first 11 bases are extra, start alignment from query[12:]
+        - offset=-2, rc=True: reverse complement target, then query's first 2 bases are extra
+        - offset=+6, rc=False: query needs 6 bases padding at beginning to align with target
+        - offset=+9, rc=True: reverse complement target, then query needs 9 bases padding
         
         Args:
             query_ppm: Query PPM as list of position probability vectors
             target_ppm: Target PPM as list of position probability vectors  
-            offset: Offset from XML (positive means target starts later, negative means query starts later)
+            offset: Offset value (negative = trim query start, positive = pad query start)
+            rc: Whether to reverse complement target before alignment
         
         Returns:
             Tuple of (aligned_query_ppm, aligned_target_ppm) with same length
         """
-        query_len = len(query_ppm)
-        target_len = len(target_ppm)
-        
-        # Calculate the aligned length needed
-        if offset >= 0:
-            # Target starts later, need to pad query at start
-            aligned_length = max(query_len + offset, target_len)
-            query_start_pad = offset
-            target_start_pad = 0
-        else:
-            # Query starts later, need to pad target at start
-            aligned_length = max(target_len - offset, query_len)
-            query_start_pad = 0
-            target_start_pad = -offset
-        
-        # Create aligned PPMs with uniform background (0.25 for each base)
         background = [0.25, 0.25, 0.25, 0.25]
         
-        # Align query PPM
-        aligned_query = []
-        for i in range(aligned_length):
-            if i < query_start_pad or i >= query_start_pad + query_len:
-                aligned_query.append(background)
-            else:
-                aligned_query.append(query_ppm[i - query_start_pad])
+        # Step 1: Apply reverse complement to target if rc=True
+        working_target = target_ppm.copy()
+        if rc:
+            # Reverse complement target: reverse sequence and swap A<->T, C<->G
+            working_target = working_target[::-1]  # Reverse the sequence
+            for i in range(len(working_target)):
+                # Swap A<->T, C<->G (A=0, C=1, G=2, T=3)
+                working_target[i] = [
+                    working_target[i][3],  # T -> A
+                    working_target[i][2],  # G -> C  
+                    working_target[i][1],  # C -> G
+                    working_target[i][0]   # A -> T
+                ]
         
-        # Align target PPM
-        aligned_target = []
-        for i in range(aligned_length):
-            if i < target_start_pad or i >= target_start_pad + target_len:
-                aligned_target.append(background)
+        # Step 2: Apply offset-based alignment to query
+        working_query = query_ppm.copy()
+        
+        if offset < 0:
+            # Negative offset: query has extra bases at beginning, remove |offset| bases
+            trim_amount = abs(offset)
+            if trim_amount >= len(working_query):
+                # If trimming more than query length, return empty alignment
+                working_query = []
             else:
-                aligned_target.append(target_ppm[i - target_start_pad])
+                working_query = working_query[trim_amount:]
+        elif offset > 0:
+            # Positive offset: query needs padding at beginning to align with target
+            padding = [background] * offset
+            working_query = padding + working_query
+        # offset == 0: no change needed
+        
+        # Step 3: Trim both sequences to shortest length to ensure proper alignment
+        min_length = min(len(working_query), len(working_target))
+        
+        if min_length == 0:
+            # Handle edge case where one sequence becomes empty
+            return [], []
+        
+        aligned_query = working_query[:min_length]
+        aligned_target = working_target[:min_length]
         
         return aligned_query, aligned_target
 
@@ -176,7 +284,8 @@ class MotifAnalysisPipeline:
                         # Align PPMs based on offset
                         query_ppm = query_motifs[q_idx]["ppm"]
                         target_ppm = target_motifs[t_idx]["ppm"]
-                        aligned_query_ppm, aligned_target_ppm = self.align_ppms(query_ppm, target_ppm, offset)
+                        rc = (t.attrib["rc"] == "y")
+                        aligned_query_ppm, aligned_target_ppm = self.align_ppms(query_ppm, target_ppm, offset, rc)
                         
                         all_rows.append({
                             "Tissue_Index": tissue_idx,
@@ -185,7 +294,7 @@ class MotifAnalysisPipeline:
                             "Pattern_Index": pattern_index,
                             "Target_ID": target_motifs[t_idx]["id"],
                             "Jaspar_Name": target_motifs[t_idx]["alt"],
-                            "rc": (t.attrib["rc"] == "y"),
+                            "rc": rc,
                             "P_value": pv,
                             "E_value": ev,
                             "Q_value": qv,
@@ -219,8 +328,8 @@ class MotifAnalysisPipeline:
         
         # Group by Jaspar motif name
         for jaspar_name, motif_group in self.tomtom_matches.groupby("Jaspar_Name"):
-            # Find the best match (lowest E-value) for this motif
-            best_match = motif_group.loc[motif_group["E_value"].idxmin()]
+            # Find the best match (lowest P-value) for this motif
+            best_match = motif_group.loc[motif_group["P_value"].idxmin()]
             
             # Store motif metadata from the best match
             motif_metadata[jaspar_name] = {
@@ -247,7 +356,7 @@ class MotifAnalysisPipeline:
                     print(f"Warning: Could not parse Query_ID {query_id}")
                     continue
                 
-                modisco_file = f"{self.data_dir}/tissue_{tissue_idx}.lite.h5"
+                modisco_file = f"{self.data_dir}/modiscolite_tissue_{tissue_idx}.h5"
                 
                 if not os.path.exists(modisco_file):
                     print(f"Warning: Modisco file not found: {modisco_file}")
@@ -271,13 +380,32 @@ class MotifAnalysisPipeline:
                         contrib_scores = f[pattern1][pattern2]["contrib_scores"][:]
                         hypothetical_contribs = f[pattern1][pattern2]["hypothetical_contribs"][:]
                         sequence = f[pattern1][pattern2]["sequence"][:]
+                        
+                        # Get grads file length for coordinate conversion if needed
+                        grads_length = None
+                        if self.window_size is not None:
+                            grads_file = f"{self.grads_dir}/tissue_{tissue_idx}.h5"
+                            if os.path.exists(grads_file):
+                                try:
+                                    with h5py.File(grads_file, "r") as grads_f:
+                                        grads_length = grads_f["grads_saliency"].shape[1]
+                                except Exception:
+                                    pass
+                        
                         # Create seqlet records for DataFrame
                         for i in range(n_seqlets):
+                            # Convert coordinates if window_size is specified
+                            abs_start, abs_end = self.convert_seqlet_coordinates(
+                                int(start[i]), int(end[i]), grads_length
+                            ) if grads_length is not None else (int(start[i]), int(end[i]))
+                            
                             seqlet_record = {
                                 "tissue_idx": tissue_idx,
                                 "example_idx": int(example_idx[i]),
-                                "start": int(start[i]),
-                                "end": int(end[i]),
+                                "start": int(start[i]),  # Original relative coordinates
+                                "end": int(end[i]),      # Original relative coordinates
+                                "abs_start": abs_start,  # Absolute coordinates in grads
+                                "abs_end": abs_end,      # Absolute coordinates in grads
                                 "query_id": query_id,
                                 "jaspar_name": jaspar_name,
                                 "pattern_group": pattern_group if pattern_group is not None else pattern1,
@@ -308,7 +436,7 @@ class MotifAnalysisPipeline:
         Layout:
           /motifs/{jaspar_name}/target_ppm [L,4]
           /motifs/{jaspar_name}/target_id (attr)
-          /motifs/{jaspar_name}/best_evalue (attr) - lowest E-value among all matches
+          /motifs/{jaspar_name}/best_evalue (attr) - E-value of the best match (selected by lowest P-value)
           /motifs/{jaspar_name}/best_pvalue (attr) - P-value corresponding to best match
           /motifs/{jaspar_name}/best_query_id (attr) - Query ID of best match
           /motifs/{jaspar_name}/best_tissue_idx (attr) - Tissue index of best match
@@ -413,6 +541,13 @@ class MotifAnalysisPipeline:
                     tgrp.create_dataset("pattern_group", data=pat_grp)
                     tgrp.create_dataset("pattern_index", data=pat_idx)
                     
+                    # Save absolute coordinates if available
+                    if "abs_start" in tissue_seqlets.columns and tissue_seqlets["abs_start"].notna().any():
+                        abs_starts = tissue_seqlets["abs_start"].values.astype(np.int32)
+                        abs_ends = tissue_seqlets["abs_end"].values.astype(np.int32)
+                        tgrp.create_dataset("abs_start", data=abs_starts)
+                        tgrp.create_dataset("abs_end", data=abs_ends)
+                    
                     # Optional is_revcomp
                     if "is_revcomp" in tissue_seqlets.columns and tissue_seqlets["is_revcomp"].notna().any():
                         is_rev = tissue_seqlets["is_revcomp"].fillna(False).values.astype(np.bool_)
@@ -506,6 +641,20 @@ class MotifAnalysisPipeline:
                     else:
                         th_grp.create_dataset(col, data=vals)
             
+            # Save individual seqlet saliency scores if available
+            if hasattr(self, 'seqlet_saliency_df') and self.seqlet_saliency_df is not None and len(self.seqlet_saliency_df) > 0:
+                ss_grp = analysis_grp.create_group("seqlet_saliency_scores")
+                
+                def _to_bytes_array(arr):
+                    return np.asarray([str(x).encode("utf-8") for x in arr])
+                
+                for col in self.seqlet_saliency_df.columns:
+                    vals = self.seqlet_saliency_df[col].values
+                    if col in ["Jaspar_Name"]:
+                        ss_grp.create_dataset(col, data=_to_bytes_array(vals), compression="gzip")
+                    else:
+                        ss_grp.create_dataset(col, data=vals)
+            
             # Note: tissue_saliency_scores is deprecated in favor of cross_tissue_stats_df
             # The old structure is no longer used in the new pipeline
         
@@ -534,22 +683,21 @@ class MotifAnalysisPipeline:
                 return None
             try:
                 with h5py.File(grads_file, "r") as f:
-                    arr = f["grads_saliency"][:]
-                # Assume fixed layout [N, L, D, T]
-                grads_cache[tissue_idx] = arr
-                print(f"Loaded grads for tissue {tissue_idx}: {arr.shape}")
-                return arr
+                    grads_cache[tissue_idx] = f["grads_saliency"][:]
+                return grads_cache[tissue_idx]
             except Exception as e:
-                print(f"Error reading grads from {grads_file}: {e}")
+                print(f"Error loading grads file {grads_file}: {e}")
                 grads_cache[tissue_idx] = None
                 return None
-        
+
         # Pre-load all needed grads files
         for tissue_idx in self.tissue_indices:
             get_tissue_grads(int(tissue_idx))
 
         records = []
         wilcoxon_rows = []
+        # Store individual seqlet saliency scores for plotting
+        seqlet_saliency_records = []
 
         total_motifs = self.merged_seqlets_df['jaspar_name'].nunique()
         print(f"Processing {total_motifs} motifs...")
@@ -562,7 +710,7 @@ class MotifAnalysisPipeline:
             # For each seqlet, read grads from its origin-tissue file and slice last dim by selected tissue
             tissue_to_scores = {int(ti): [] for ti in self.tissue_indices}
 
-            for _, row in motif_seqlets.iterrows():
+            for seqlet_idx, row in motif_seqlets.iterrows():
                 try:
                     origin_tissue = int(row["tissue_idx"])  # grads N dimension belongs to this origin tissue
                     grads_arr = get_tissue_grads(origin_tissue)
@@ -573,12 +721,35 @@ class MotifAnalysisPipeline:
                     en = int(row["end"])
                     if en <= st:
                         continue
+                    
+                    # Convert coordinates if window_size is specified
+                    grads_length = grads_arr.shape[1]  # Get sequence length from grads array
+                    abs_st, abs_en = self.convert_seqlet_coordinates(st, en, grads_length)
+                    
+                    # Validate converted coordinates
+                    if abs_en <= abs_st or abs_st < 0 or abs_en > grads_length:
+                        continue
+                    
                     for sel_t in self.tissue_indices:
                         sel_t = int(sel_t)
                         if sel_t >= grads_arr.shape[3]:
                             continue
-                        window = grads_arr[ex, st:en, :, sel_t]
-                        tissue_to_scores[sel_t].append(float(np.mean(window)))
+                        window = grads_arr[ex, abs_st:abs_en, :, sel_t]
+                        saliency_score = float(np.mean(window))
+                        tissue_to_scores[sel_t].append(saliency_score)
+                        
+                        # Store individual seqlet saliency score for plotting
+                        seqlet_saliency_records.append({
+                            "Jaspar_Name": jaspar_name,
+                            "Tissue": int(sel_t),
+                            "Origin_Tissue": int(origin_tissue),
+                            "Example_Idx": int(ex),
+                            "Start": int(st),  # Keep original relative coordinates
+                            "End": int(en),    # Keep original relative coordinates
+                            "Abs_Start": int(abs_st),  # Add absolute coordinates
+                            "Abs_End": int(abs_en),    # Add absolute coordinates
+                            "Saliency_Score": saliency_score
+                        })
                 except Exception:
                     continue
 
@@ -605,150 +776,200 @@ class MotifAnalysisPipeline:
                     "N": nseq
                 })
 
-            # Wilcoxon rank-sum: top vs second by 95th percentile
+            # Dual statistical testing approach: P95 branch (activation) and P05 branch (repression)
             if len(tissue_to_scores) >= 2:
-                # Determine top two by P95
-                t_stats = []
+                # Get target_id from motif_metadata
+                target_id = None
+                if hasattr(self, 'motif_metadata') and jaspar_name in self.motif_metadata:
+                    target_id = self.motif_metadata[jaspar_name].get("target_id")
+                
+                # P95 branch: Find top two tissues by P95 (activation)
+                t_stats_p95 = []
                 for t_idx, scores in tissue_to_scores.items():
                     if scores.size == 0:
                         continue
-                    t_stats.append((t_idx, float(np.quantile(scores, 0.95))))
-                if len(t_stats) >= 2:
-                    t_stats.sort(key=lambda x: x[1], reverse=True)
-                    top_t, top_p95 = t_stats[0]
-                    sec_t, sec_p95 = t_stats[1]
-                    x = tissue_to_scores[top_t]
-                    y = tissue_to_scores[sec_t]
-                    if x.size > 0 and y.size > 0:
+                    t_stats_p95.append((t_idx, float(np.quantile(scores, 0.95))))
+                
+                if len(t_stats_p95) >= 2:
+                    t_stats_p95.sort(key=lambda x: x[1], reverse=True)
+                    top_t_p95, top_p95 = t_stats_p95[0]
+                    sec_t_p95, sec_p95 = t_stats_p95[1]
+                    x_p95 = tissue_to_scores[top_t_p95]
+                    y_p95 = tissue_to_scores[sec_t_p95]
+                    
+                    # U test for P95 branch (alternative="greater")
+                    p95_u_stat, p95_pval = np.nan, np.nan
+                    if x_p95.size > 0 and y_p95.size > 0:
                         try:
-                            stat, pval = mannwhitneyu(x, y, alternative='greater')
+                            p95_u_stat, p95_pval = mannwhitneyu(x_p95, y_p95, alternative='greater')
                         except Exception:
-                            stat, pval = np.nan, np.nan
-                        # Get target_id from motif_metadata
-                        target_id = None
-                        if hasattr(self, 'motif_metadata') and jaspar_name in self.motif_metadata:
-                            target_id = self.motif_metadata[jaspar_name].get("target_id")
-                        
-                        wilcoxon_rows.append({
-                            "Jaspar_Name": jaspar_name,
-                            "Target_ID": target_id,
-                            "Top_Tissue": int(top_t),
-                            "Second_Tissue": int(sec_t),
-                            "Top_P95": float(top_p95),
-                            "Second_P95": float(sec_p95),
-                            "U_stat": float(stat) if not isinstance(stat, float) else stat,
-                            "P_value": float(pval) if not isinstance(pval, float) else pval
-                        })
+                            pass
+                else:
+                    top_t_p95, sec_t_p95, top_p95, sec_p95 = None, None, np.nan, np.nan
+                    p95_u_stat, p95_pval = np.nan, np.nan
+                
+                # P05 branch: Find tissues with negative values and lowest P05 (repression)
+                t_stats_p05 = []
+                for t_idx, scores in tissue_to_scores.items():
+                    if scores.size == 0:
+                        continue
+                    p05_val = float(np.quantile(scores, 0.05))
+                    # Only consider tissues with negative P05 values for repression analysis
+                    if p05_val < 0:
+                        t_stats_p05.append((t_idx, p05_val))
+                
+                # Sort by P05 value (ascending, so most negative comes first)
+                if len(t_stats_p05) >= 2:
+                    t_stats_p05.sort(key=lambda x: x[1])
+                    top_t_p05, top_p05 = t_stats_p05[0]  # Most negative P05
+                    sec_t_p05, sec_p05 = t_stats_p05[1]  # Second most negative P05
+                    x_p05 = tissue_to_scores[top_t_p05]
+                    y_p05 = tissue_to_scores[sec_t_p05]
+                    
+                    # U test for P05 branch (alternative="less")
+                    p05_u_stat, p05_pval = np.nan, np.nan
+                    if x_p05.size > 0 and y_p05.size > 0:
+                        try:
+                            p05_u_stat, p05_pval = mannwhitneyu(x_p05, y_p05, alternative='less')
+                        except Exception:
+                            pass
+                else:
+                    top_t_p05, sec_t_p05, top_p05, sec_p05 = None, None, np.nan, np.nan
+                    p05_u_stat, p05_pval = np.nan, np.nan
+                
+                # Store results for both branches
+                wilcoxon_rows.append({
+                    "Jaspar_Name": jaspar_name,
+                    "Target_ID": target_id,
+                    # P95 branch (activation)
+                    "Top_Tissue_P95": int(top_t_p95) if top_t_p95 is not None else None,
+                    "Second_Tissue_P95": int(sec_t_p95) if sec_t_p95 is not None else None,
+                    "Top_P95": float(top_p95) if not pd.isna(top_p95) else None,
+                    "Second_P95": float(sec_p95) if not pd.isna(sec_p95) else None,
+                    "P95_U_stat": float(p95_u_stat) if not pd.isna(p95_u_stat) else None,
+                    "P95_P_value": float(p95_pval) if not pd.isna(p95_pval) else None,
+                    # P05 branch (repression)
+                    "Top_Tissue_P05": int(top_t_p05) if top_t_p05 is not None else None,
+                    "Second_Tissue_P05": int(sec_t_p05) if sec_t_p05 is not None else None,
+                    "Top_P05": float(top_p05) if not pd.isna(top_p05) else None,
+                    "Second_P05": float(sec_p05) if not pd.isna(sec_p05) else None,
+                    "P05_U_stat": float(p05_u_stat) if not pd.isna(p05_u_stat) else None,
+                    "P05_P_value": float(p05_pval) if not pd.isna(p05_pval) else None
+                })
 
         self.cross_tissue_stats_df = pd.DataFrame.from_records(records)
         self.wilcoxon_results_df = pd.DataFrame.from_records(wilcoxon_rows)
+        # Store individual seqlet saliency scores
+        self.seqlet_saliency_df = pd.DataFrame.from_records(seqlet_saliency_records)
         print(f"Computed cross-tissue stats for {self.cross_tissue_stats_df['Jaspar_Name'].nunique() if len(self.cross_tissue_stats_df)>0 else 0} motifs")
+        print(f"Stored {len(self.seqlet_saliency_df)} individual seqlet saliency scores for plotting")
         return self.cross_tissue_stats_df
 
     def select_top_hits(self, alpha: float = 0.05) -> pd.DataFrame:
-        """Select top-hit motifs per tissue where top tissue's P95 is significantly higher than second.
+        """Select top-hit motifs with dual testing approach for activation and repression.
+        
+        Logic:
+        - P95 branch: Test if top tissue's P95 is significantly higher than second (activation)
+        - P05 branch: Test if top-P05 tissue's P05 is significantly lower than second-P05 (repression)
+        - Any significant test qualifies as a top hit
+        - Polarity annotation: "activation", "repression", or "both"
+        
         E-value filtering is already done in parse_tomtom_results.
-        Returns a DataFrame of top hits.
+        Returns a DataFrame of top hits with polarity information.
         """
-        print("Selecting top-hit motifs...")
+        print("Selecting top-hit motifs with dual testing approach...")
         if not hasattr(self, 'wilcoxon_results_df') or self.wilcoxon_results_df is None or len(self.wilcoxon_results_df) == 0:
             raise ValueError("Wilcoxon results not available. Run compute_cross_tissue_saliency_distributions first.")
 
         hits = []
         for _, row in self.wilcoxon_results_df.iterrows():
             jaspar = row["Jaspar_Name"]
-            top_t = int(row["Top_Tissue"])
-            pval = float(row["P_value"]) if not pd.isna(row["P_value"]) else 1.0
-            # significance by Wilcoxon only (E-value already filtered)
-            if pval <= alpha:
-                # Get target_id from motif_metadata
-                target_id = None
-                if hasattr(self, 'motif_metadata') and jaspar in self.motif_metadata:
-                    target_id = self.motif_metadata[jaspar].get("target_id")
-                
-                hits.append({
-                    "Jaspar_Name": jaspar,
-                    "Target_ID": target_id,
-                    "Top_Tissue": top_t,
-                    "Wilcoxon_P": pval,
-                    "Top_P95": float(row["Top_P95"]),
-                    "Second_Tissue": int(row["Second_Tissue"]),
-                    "Second_P95": float(row["Second_P95"])
-                })
-
-        self.top_hits_df = pd.DataFrame.from_records(hits)
-        print(f"Selected {len(self.top_hits_df)} top-hit motifs")
-        return self.top_hits_df
-    
-    def analyze_tissue_specificity(self) -> pd.DataFrame:
-        """Analyze tissue specificity of motifs based on saliency score distributions."""
-        print("Analyzing tissue specificity...")
-        
-        if self.tissue_saliency_scores is None:
-            raise ValueError("Must compute saliency scores first")
-        
-        specificity_analysis = []
-        
-        for jaspar_name, motif_data in self.tissue_saliency_scores.items():
-            tissues_with_data = list(motif_data["tissues"].keys())
             
-            if len(tissues_with_data) < 2:
+            # Check P95 branch significance (activation)
+            p95_pval = row.get("P95_P_value")
+            p95_significant = not pd.isna(p95_pval) and float(p95_pval) <= alpha
+            
+            # Check P05 branch significance (repression)
+            p05_pval = row.get("P05_P_value")
+            p05_significant = not pd.isna(p05_pval) and float(p05_pval) <= alpha
+            
+            # Only include if at least one branch is significant
+            if not (p95_significant or p05_significant):
                 continue
             
-            # Compare distributions between tissues
-            for i, tissue1 in enumerate(tissues_with_data):
-                for tissue2 in tissues_with_data[i+1:]:
-                    scores1 = motif_data["tissues"][tissue1]["saliency_scores"]
-                    scores2 = motif_data["tissues"][tissue2]["saliency_scores"]
-                    
-                    if len(scores1) > 0 and len(scores2) > 0:
-                        # Compute effect size (Cohen's d)
-                        pooled_std = np.sqrt(((len(scores1) - 1) * np.var(scores1) + 
-                                            (len(scores2) - 1) * np.var(scores2)) / 
-                                           (len(scores1) + len(scores2) - 2))
-                        
-                        if pooled_std > 0:
-                            cohens_d = (np.mean(scores1) - np.mean(scores2)) / pooled_std
-                        else:
-                            cohens_d = 0.0
-                        
-                        # Determine which tissue has higher scores
-                        if np.mean(scores1) > np.mean(scores2):
-                            higher_tissue = tissue1
-                            lower_tissue = tissue2
-                            higher_mean = np.mean(scores1)
-                            lower_mean = np.mean(scores2)
-                        else:
-                            higher_tissue = tissue2
-                            lower_tissue = tissue1
-                            higher_mean = np.mean(scores2)
-                            lower_mean = np.mean(scores1)
-                        
-                        specificity_analysis.append({
-                            "Jaspar_Name": jaspar_name,
-                            "Tissue1": tissue1,
-                            "Tissue2": tissue2,
-                            "Tissue1_Mean": float(np.mean(scores1)),
-                            "Tissue2_Mean": float(np.mean(scores2)),
-                            "Higher_Tissue": higher_tissue,
-                            "Lower_Tissue": lower_tissue,
-                            "Higher_Mean": float(higher_mean),
-                            "Lower_Mean": float(lower_mean),
-                            "Effect_Size": float(cohens_d),
-                            "Tissue1_n": len(scores1),
-                            "Tissue2_n": len(scores2),
-                            "Fold_Change": float(higher_mean / lower_mean) if lower_mean > 0 else float('inf')
-                        })
+            # Determine polarity
+            if p95_significant and p05_significant:
+                polarity = "both"
+                # Use P95 branch as primary for "both" cases
+                top_tissue = int(row["Top_Tissue_P95"]) if not pd.isna(row["Top_Tissue_P95"]) else None
+                primary_pval = float(p95_pval)
+            elif p95_significant:
+                polarity = "activation"
+                top_tissue = int(row["Top_Tissue_P95"]) if not pd.isna(row["Top_Tissue_P95"]) else None
+                primary_pval = float(p95_pval)
+            else:  # p05_significant
+                polarity = "repression"
+                top_tissue = int(row["Top_Tissue_P05"]) if not pd.isna(row["Top_Tissue_P05"]) else None
+                primary_pval = float(p05_pval)
+            
+            # Get motif metadata
+            target_id = None
+            best_evalue = None
+            best_pvalue = None
+            direction = None
+            if hasattr(self, 'motif_metadata') and jaspar in self.motif_metadata:
+                metadata = self.motif_metadata[jaspar]
+                target_id = metadata.get("target_id")
+                best_evalue = metadata.get("best_evalue")
+                best_pvalue = metadata.get("best_pvalue")
+                # Get direction from tomtom_matches for the best match
+                if hasattr(self, 'tomtom_matches') and self.tomtom_matches is not None:
+                    best_match = self.tomtom_matches[
+                        (self.tomtom_matches["Jaspar_Name"] == jaspar) & 
+                        (self.tomtom_matches["P_value"] == best_pvalue)
+                    ]
+                    if len(best_match) > 0:
+                        direction = "reverse" if best_match.iloc[0]["rc"] else "forward"
+            
+            # Build hit record
+            hit_record = {
+                "Jaspar_Name": jaspar,
+                "Target_ID": target_id,
+                "Best_Evalue": best_evalue,
+                "Direction": direction,
+                "Top_Tissue": top_tissue,
+                "Polarity": polarity,
+                "Primary_P_value": primary_pval,
+                # P95 branch results
+                "P95_Significant": p95_significant,
+                "P95_P_value": float(p95_pval) if not pd.isna(p95_pval) else None,
+                "Top_Tissue_P95": int(row["Top_Tissue_P95"]) if not pd.isna(row["Top_Tissue_P95"]) else None,
+                "Second_Tissue_P95": int(row["Second_Tissue_P95"]) if not pd.isna(row["Second_Tissue_P95"]) else None,
+                "Top_P95": float(row["Top_P95"]) if not pd.isna(row["Top_P95"]) else None,
+                "Second_P95": float(row["Second_P95"]) if not pd.isna(row["Second_P95"]) else None,
+                # P05 branch results
+                "P05_Significant": p05_significant,
+                "P05_P_value": float(p05_pval) if not pd.isna(p05_pval) else None,
+                "Top_Tissue_P05": int(row["Top_Tissue_P05"]) if not pd.isna(row["Top_Tissue_P05"]) else None,
+                "Second_Tissue_P05": int(row["Second_Tissue_P05"]) if not pd.isna(row["Second_Tissue_P05"]) else None,
+                "Top_P05": float(row["Top_P05"]) if not pd.isna(row["Top_P05"]) else None,
+                "Second_P05": float(row["Second_P05"]) if not pd.isna(row["Second_P05"]) else None
+            }
+            
+            hits.append(hit_record)
+
+        self.top_hits_df = pd.DataFrame.from_records(hits)
         
-        specificity_df = pd.DataFrame(specificity_analysis)
+        # Print summary statistics
+        if len(self.top_hits_df) > 0:
+            polarity_counts = self.top_hits_df['Polarity'].value_counts()
+            print(f"Selected {len(self.top_hits_df)} top-hit motifs:")
+            for polarity, count in polarity_counts.items():
+                print(f"  - {polarity}: {count}")
+        else:
+            print("No significant top-hit motifs found")
         
-        # Add tissue names
-        specificity_df["Tissue1_Name"] = specificity_df["Tissue1"].map(self.tissue_names)
-        specificity_df["Tissue2_Name"] = specificity_df["Tissue2"].map(self.tissue_names)
-        specificity_df["Higher_Tissue_Name"] = specificity_df["Higher_Tissue"].map(self.tissue_names)
-        
-        print(f"Analyzed tissue specificity for {len(specificity_df)} motif-tissue comparisons")
-        return specificity_df
+        return self.top_hits_df
     
     def save_results(self, output_dir: str = None):
         """Save all results to files.
@@ -795,6 +1016,11 @@ class MotifAnalysisPipeline:
             self.top_hits_df.to_csv(f"{output_dir}/top_hits.tsv", sep="\t", index=False)
             print(f"Saved top hits to {output_dir}/top_hits.tsv")
         
+        # Save individual seqlet saliency scores if available
+        if hasattr(self, 'seqlet_saliency_df') and self.seqlet_saliency_df is not None:
+            self.seqlet_saliency_df.to_csv(f"{output_dir}/seqlet_saliency_scores.tsv", sep="\t", index=False)
+            print(f"Saved seqlet saliency scores to {output_dir}/seqlet_saliency_scores.tsv")
+        
         print("Results saved successfully!")
     
 
@@ -834,7 +1060,9 @@ def main():
     parser.add_argument("--data_dir", required=True, help="modisco results, tomtom results directory path")
     parser.add_argument("--evalue_thresh", type=float, default=0.1, help="E-value threshold for Tomtom matches")
     parser.add_argument("--output_dir", default="motif_analysis_results", help="Output directory")
-    parser.add_argument("--tissues_dict", default=None, help="Tissues dictionary file for mapping tissue indices to names")
+    parser.add_argument("--window_size", type=int, default=None, help="Window size used in modiscolite (for coordinate conversion)")
+    parser.add_argument("--up_size", type=int, default=None, help="Upstream size used in preprocessing (for coordinate conversion from output window)")
+    parser.add_argument("--down_size", type=int, default=None, help="Downstream size used in preprocessing (for coordinate conversion from output window)")
 
     
     
@@ -843,7 +1071,7 @@ def main():
     # Create pipeline and run
     pipeline = MotifAnalysisPipeline(
         args.tissue_indices, args.grads_dir, args.data_dir, 
-        args.output_dir, args.evalue_thresh, args.tissues_dict)
+        args.output_dir, args.evalue_thresh, args.window_size, args.up_size, args.down_size)
     results = pipeline.run_pipeline()
     
     print(f"\nPipeline Summary:")
@@ -867,5 +1095,8 @@ if __name__ == "__main__":
             "--grads_dir", "/data/xhhuanglab/gulei/projects/paddy/motif_pipeline/5tissues_atg_grads",
             "--output_dir", "/data/xhhuanglab/gulei/projects/paddy/motif_pipeline/modisco_analysis_results",
             "--evalue_thresh", "0.1",
+            "--window_size", "32768",  # Center size used in preprocessing
+            "--up_size", "2000",       # Example: 2000bp upstream
+            "--down_size", "0",        # Example: 0bp downstream (user's case)
         ]
     main()

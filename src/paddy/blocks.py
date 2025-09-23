@@ -1999,6 +1999,209 @@ def global_pool(
     return current
 
 
+def transformer_pool(
+    inputs,
+    output_dim=None,
+    num_heads=8,
+    key_dim=None,
+    num_queries=1,
+    query_init="random",
+    attention_dropout=0.1,
+    output_dropout=0.1,
+    use_bias=True,
+    kernel_initializer="glorot_uniform",
+    l2_scale=0.0001,
+    axis=1,
+    multi_query_reduction="flatten",  # 新增：多查询时的降维方式："flatten", "mean", "max", "concat"
+    **kwargs,
+):
+    """Transformer-style attention pooling with learnable queries and multi-head attention.
+    
+    This function implements a sophisticated pooling mechanism that:
+    1. Uses learnable query vectors to focus on different aspects of the input
+    2. Employs multi-head attention to capture multiple "attention perspectives"
+    3. Performs dimensionality reduction while preserving important information
+    4. Allows the model to learn what to focus on rather than using fixed pooling
+    
+    Args:
+        inputs: Input tensor [batch_size, seq_length, features] or [batch_size, tracks, bins]
+        output_dim: Output feature dimension (if None, uses input feature dim)
+        num_heads: Number of attention heads for multi-head attention
+        key_dim: Dimension of attention keys (if None, uses output_dim // num_heads)
+        num_queries: Number of learnable query vectors (1 for global pool, >1 for multiple aspects)
+        query_init: Query initialization strategy ("random", "mean", "zeros")
+        attention_dropout: Dropout rate for attention weights
+        output_dropout: Dropout rate for final output
+        use_bias: Whether to use bias in dense layers
+        kernel_initializer: Initializer for weight matrices
+        l2_scale: L2 regularization weight
+        axis: Axis to pool along (1=seq_length/tracks, 2=features/bins)
+        multi_query_reduction: How to reduce multiple queries to single output:
+            - "flatten": Flatten [batch_size, num_queries, output_dim] -> [batch_size, num_queries*output_dim]
+            - "mean": Average across queries -> [batch_size, output_dim]
+            - "max": Max across queries -> [batch_size, output_dim] 
+            - "concat": Same as "flatten"
+            - "none": Keep original shape [batch_size, num_queries, output_dim]
+        
+    Returns:
+        When num_queries=1: [batch_size, output_dim] - Global pooled representation
+        When num_queries>1: Depends on multi_query_reduction parameter
+    """
+    current = inputs
+    input_shape = current.shape
+    batch_size = input_shape[0]
+    
+    # Handle axis specification - transpose if pooling along features/bins
+    if axis == 2:
+        current = tf.transpose(current, perm=[0, 2, 1])
+        seq_length = input_shape[2]  # bins
+        feature_dim = input_shape[1]  # tracks
+    else:
+        seq_length = input_shape[1]   # seq_length/tracks
+        feature_dim = input_shape[2]  # features/bins
+    
+    # Set default dimensions
+    if output_dim is None:
+        output_dim = feature_dim
+    if key_dim is None:
+        key_dim = max(32, output_dim // num_heads)
+    
+    # Create learnable query vectors
+    if query_init == "mean":
+        # Initialize queries as mean of input features
+        query_init_value = tf.reduce_mean(tf.reduce_mean(current, axis=0), axis=0, keepdims=True)
+        query_init_value = tf.tile(query_init_value, [num_queries, 1])
+    elif query_init == "zeros":
+        query_init_value = tf.zeros([num_queries, feature_dim])
+    else:  # "random"
+        query_init_value = None
+    
+    # Learnable query parameters
+    if query_init_value is not None:
+        learnable_queries = tf.Variable(
+            initial_value=query_init_value,
+            trainable=True,
+            name="transformer_pool_queries"
+        )
+    else:
+        learnable_queries = tf.keras.layers.Embedding(
+            num_queries,
+            feature_dim,
+            embeddings_initializer=kernel_initializer,
+            embeddings_regularizer=tf.keras.regularizers.l2(l2_scale),
+            name="transformer_pool_queries"
+        )(tf.range(num_queries))
+    
+    # Project queries to attention space
+    query_projection = tf.keras.layers.Dense(
+        num_heads * key_dim,
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="query_projection"
+    )
+    
+    # Project input keys and values
+    key_projection = tf.keras.layers.Dense(
+        num_heads * key_dim,
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="key_projection"
+    )
+    
+    value_projection = tf.keras.layers.Dense(
+        num_heads * key_dim,
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="value_projection"
+    )
+    
+    # Expand queries for batch dimension: [num_queries, feature_dim] -> [batch_size, num_queries, feature_dim]
+    # Use tf.shape to get dynamic dimensions
+    B = tf.shape(current)[0]
+    T = tf.shape(current)[1]  # seq_length
+    Qn = num_queries
+    H = num_heads
+    Kd = key_dim
+    
+    queries = tf.repeat(learnable_queries[None, ...], repeats=B, axis=0)
+    # Apply projections
+    Q = query_projection(queries)  # [batch_size, num_queries, num_heads * key_dim]
+    K = key_projection(current)    # [batch_size, seq_length, num_heads * key_dim]
+    V = value_projection(current)  # [batch_size, seq_length, num_heads * key_dim]
+    
+    # Reshape for multi-head attention - use dynamic shapes
+    Q = tf.reshape(Q, [B, Qn, H, Kd])
+    K = tf.reshape(K, [B, T, H, Kd])
+    V = tf.reshape(V, [B, T, H, Kd])
+    
+    # Transpose for attention computation: [batch_size, num_heads, *, key_dim]
+    Q = tf.transpose(Q, [0, 2, 1, 3])  # [batch_size, num_heads, num_queries, key_dim]
+    K = tf.transpose(K, [0, 2, 1, 3])  # [batch_size, num_heads, seq_length, key_dim]
+    V = tf.transpose(V, [0, 2, 1, 3])  # [batch_size, num_heads, seq_length, key_dim]
+    
+    # Compute attention scores: Q @ K^T
+    attention_scores = tf.matmul(Q, K, transpose_b=True)  # [batch_size, num_heads, num_queries, seq_length]
+    
+    # Scale attention scores
+    scale = tf.math.sqrt(tf.cast(key_dim, tf.float32))
+    attention_scores = attention_scores / scale
+    
+    # Apply softmax to get attention weights
+    attention_weights = tf.nn.softmax(attention_scores, axis=-1)
+    
+    # Apply attention dropout
+    if attention_dropout > 0:
+        attention_weights = tf.keras.layers.Dropout(attention_dropout)(attention_weights)
+    
+    # Apply attention weights to values
+    context = tf.matmul(attention_weights, V)  # [batch_size, num_heads, num_queries, key_dim]
+    
+    # Concatenate heads: [batch_size, num_queries, num_heads * key_dim]
+    context = tf.transpose(context, [0, 2, 1, 3])
+    context = tf.reshape(context, [B, Qn, H * Kd])
+    
+    # Final output projection
+    output_projection = tf.keras.layers.Dense(
+        output_dim,
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        kernel_regularizer=tf.keras.regularizers.l2(l2_scale),
+        name="output_projection"
+    )
+    
+    output = output_projection(context)  # [batch_size, num_queries, output_dim]
+    
+    # Apply output dropout
+    if output_dropout > 0:
+        output = tf.keras.layers.Dropout(output_dropout)(output)
+    
+    # Handle multi-query dimension reduction
+    if num_queries == 1:
+        # Single query: squeeze to [batch_size, output_dim]
+        output = tf.squeeze(output, axis=1)
+    else:
+        # Multiple queries: apply reduction strategy
+        if multi_query_reduction == "flatten" or multi_query_reduction == "concat":
+            # Flatten to [batch_size, num_queries * output_dim]
+            output = tf.reshape(output, [B, Qn * output_dim])
+        elif multi_query_reduction == "mean":
+            # Average across queries: [batch_size, output_dim]
+            output = tf.reduce_mean(output, axis=1)
+        elif multi_query_reduction == "max":
+            # Max across queries: [batch_size, output_dim]
+            output = tf.reduce_max(output, axis=1)
+        elif multi_query_reduction == "none":
+            # Keep original shape: [batch_size, num_queries, output_dim]
+            pass
+        else:
+            raise ValueError(f"Unknown multi_query_reduction: {multi_query_reduction}")
+    
+    return output
+
+
 def dense_head(
     inputs,
     units=None,
@@ -2331,7 +2534,8 @@ name_func = {
     "dense_position": dense_position,
     "tissue_specific_attention": tissue_specific_attention,
     "tissue_relationship_encoder": tissue_relationship_encoder,
-    "tissue_multihead_attention": tissue_multihead_attention
+    "tissue_multihead_attention": tissue_multihead_attention,
+    "transformer_pool": transformer_pool
 }
 
 keras_func = {

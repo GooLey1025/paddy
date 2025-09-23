@@ -599,7 +599,10 @@ class SeqDataset:
                 sequence = tf.cast(sequence, tf.float32)
 
             # decode targets
-            targets = tf.io.decode_raw(parsed_features["target"], tf.float32)
+            if model_type == "2d_to_1d":
+                targets = tf.io.decode_raw(parsed_features["target"], tf.float32)
+            elif model_type == "2d_to_2d":
+                targets = tf.io.decode_raw(parsed_features["target"], tf.float16)
             if not raw:
                 # Handle different data types
                 if model_type == "2d_to_1d":

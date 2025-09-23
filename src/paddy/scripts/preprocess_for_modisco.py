@@ -11,7 +11,7 @@ from pathlib import Path
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Preprocess gradients for TF-MoDISco analysis (concat all tissues into one H5)",
+        description="Preprocess gradients for TF-MoDISco analysis",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
@@ -50,6 +50,18 @@ def parse_args():
         type=int,
         default=32768,
         help="Size of centered region to extract (in bp)"
+    )
+    parser.add_argument(
+        "--up_size",
+        type=int,
+        default=None,
+        help="Size of upstream region from center for output (in bp). Can be used alone or with --down_size. Default: 0 if --down_size specified."
+    )
+    parser.add_argument(
+        "--down_size",
+        type=int,
+        default=None,
+        help="Size of downstream region from center for output (in bp). Can be used alone or with --up_size. Default: 0 if --up_size specified."
     )
     parser.add_argument(
         "--gaussian_sigma",
@@ -170,6 +182,39 @@ def apply_reweighting(grads, reweighting_factors):
     else:
         factors = reweighting_factors[None, :, None]
     return grads / factors
+
+def extract_output_window(data, center_size, up_size, down_size):
+    """Extract the final output window from the center_size data.
+    
+    Args:
+        data: Input data array with shape (n_genes, seq_len, ...)
+        center_size: Size of the input data sequence dimension
+        up_size: Upstream size from center
+        down_size: Downstream size from center
+    
+    Returns:
+        Extracted data with the output window
+    """
+    if up_size is None or down_size is None:
+        return data
+    
+    seq_len = data.shape[1]
+    if seq_len != center_size:
+        raise ValueError(f"Expected sequence length {center_size}, got {seq_len}")
+    
+    # Calculate the output window
+    output_size = up_size + down_size
+    center_pos = seq_len // 2
+    start = center_pos - up_size
+    end = center_pos + down_size
+    
+    # Validate bounds
+    if start < 0 or end > seq_len:
+        raise ValueError(f"Output window [{start}:{end}] exceeds center_size bounds [0:{seq_len}]. "
+                        f"up_size ({up_size}) + down_size ({down_size}) = {output_size} must be <= center_size ({center_size})")
+    
+    print(f"  Extracting output window: center_pos={center_pos}, [{start}:{end}] (up={up_size}, down={down_size})")
+    return data[:, start:end, ...]
 
 def process_one_tissue(tissue_idx, grad_dir, center_size, gaussian_sigma, gaussian_truncate, use_residual):
     print(f"\nProcessing tissue {tissue_idx} ...")
@@ -304,8 +349,13 @@ def save_as_npy_npz(out_path, out_format, all_grads, all_seqs, all_tissue_indice
             'tissue_indices_order': np.array(tissue_indices, dtype=np.int32),
             'residual_computation': bool(args.residual),
             'gaussian_filtering': args.gaussian_sigma is not None,
-            'center_size': int(hyp_scores.shape[1])
+            'center_size': int(args.center_size if hasattr(args, 'center_size') else hyp_scores.shape[1]),
+            'output_window_size': int(hyp_scores.shape[1])
         }
+        
+        if hasattr(args, 'up_size') and args.up_size is not None:
+            save_dict['up_size'] = int(args.up_size)
+            save_dict['down_size'] = int(args.down_size)
         
         if args.gaussian_sigma is not None:
             save_dict['gaussian_sigma'] = float(args.gaussian_sigma)
@@ -330,6 +380,37 @@ def main():
         print("Error: Invalid tissue indices. Please provide comma-separated integers.")
         sys.exit(1)
 
+    # Handle up_size and down_size arguments with defaults
+    if args.up_size is not None or args.down_size is not None:
+        # Set defaults: if one is specified, the other defaults to 0
+        up_size = args.up_size if args.up_size is not None else 0
+        down_size = args.down_size if args.down_size is not None else 0
+        
+        # Validate values
+        if up_size < 0 or down_size < 0:
+            print("Error: --up_size and --down_size must be non-negative integers.")
+            sys.exit(1)
+        
+        if up_size == 0 and down_size == 0:
+            print("Error: At least one of --up_size or --down_size must be positive.")
+            sys.exit(1)
+        
+        output_window_size = up_size + down_size
+        if output_window_size > args.center_size:
+            print(f"Error: Output window size ({output_window_size} = {up_size} + {down_size}) "
+                  f"exceeds center_size ({args.center_size})")
+            sys.exit(1)
+        
+        # Update args to have the resolved values
+        args.up_size = up_size
+        args.down_size = down_size
+        
+        print(f"Output window configuration: up_size={up_size}, down_size={down_size}, "
+              f"total_output_size={output_window_size}")
+    else:
+        output_window_size = None
+        print("No output window specified - using full center_size")
+
     if not os.path.exists(args.grad_dir):
         print(f"Error: Gradient directory not found: {args.grad_dir}")
         sys.exit(1)
@@ -348,8 +429,18 @@ def main():
 
     with h5py.File(probe_file, 'r') as f0:
         full_L = f0['grads'].shape[1]
-    L = min(args.center_size, full_L) if args.center_size is not None else full_L
-    print(f"Sequence length to save: {L}")
+    
+    # Calculate the sequence length for processing (center_size window)
+    process_L = min(args.center_size, full_L) if args.center_size is not None else full_L
+    
+    # Calculate the final output sequence length
+    if output_window_size is not None:
+        L = output_window_size
+        print(f"Sequence length for processing: {process_L}")
+        print(f"Final output sequence length: {L} (up_size={args.up_size} + down_size={args.down_size})")
+    else:
+        L = process_L
+        print(f"Sequence length to save: {L}")
 
     if args.split_by_tissues:
         # Generate separate files for each tissue
@@ -368,6 +459,12 @@ def main():
                     use_residual=args.residual,
                 )
                 
+                # Apply output window extraction if specified
+                if output_window_size is not None:
+                    grads_block = extract_output_window(grads_block, process_L, args.up_size, args.down_size)
+                    seqs_block = extract_output_window(seqs_block, process_L, args.up_size, args.down_size)
+                
+                # Ensure final length matches expected L (this should now be redundant but kept for safety)
                 if grads_block.shape[1] != L:
                     seq_len = grads_block.shape[1]
                     if L <= seq_len:
@@ -406,7 +503,11 @@ def main():
                             out_h5.attrs['gaussian_sigma'] = float(args.gaussian_sigma)
                             if args.gaussian_truncate is not None:
                                 out_h5.attrs['gaussian_truncate'] = float(args.gaussian_truncate)
-                        out_h5.attrs['center_size'] = int(L)
+                        out_h5.attrs['center_size'] = int(args.center_size)
+                        out_h5.attrs['output_window_size'] = int(L)
+                        if args.up_size is not None:
+                            out_h5.attrs['up_size'] = int(args.up_size)
+                            out_h5.attrs['down_size'] = int(args.down_size)
                         
                         print(f"  Saved H5 file: {tissue_out_path}")
                         print(f"  Datasets:")
@@ -446,8 +547,13 @@ def main():
                             'tissue_index': np.array([tissue_idx], dtype=np.int32),
                             'residual_computation': bool(args.residual),
                             'gaussian_filtering': args.gaussian_sigma is not None,
-                            'center_size': int(L)
+                            'center_size': int(args.center_size),
+                            'output_window_size': int(L)
                         }
+                        
+                        if args.up_size is not None:
+                            save_dict['up_size'] = int(args.up_size)
+                            save_dict['down_size'] = int(args.down_size)
                         
                         if args.gaussian_sigma is not None:
                             save_dict['gaussian_sigma'] = float(args.gaussian_sigma)
@@ -497,7 +603,11 @@ def main():
                     out_h5.attrs['gaussian_sigma'] = float(args.gaussian_sigma)
                     if args.gaussian_truncate is not None:
                         out_h5.attrs['gaussian_truncate'] = float(args.gaussian_truncate)
-                out_h5.attrs['center_size'] = int(L)
+                out_h5.attrs['center_size'] = int(args.center_size)
+                out_h5.attrs['output_window_size'] = int(L)
+                if args.up_size is not None:
+                    out_h5.attrs['up_size'] = int(args.up_size)
+                    out_h5.attrs['down_size'] = int(args.down_size)
 
                 total = 0
                 for tissue_idx in tissue_indices:
@@ -511,6 +621,13 @@ def main():
                             gaussian_truncate=args.gaussian_truncate,
                             use_residual=args.residual,
                         )
+                        
+                        # Apply output window extraction if specified
+                        if output_window_size is not None:
+                            grads_block = extract_output_window(grads_block, process_L, args.up_size, args.down_size)
+                            seqs_block = extract_output_window(seqs_block, process_L, args.up_size, args.down_size)
+                        
+                        # Ensure final length matches expected L (this should now be redundant but kept for safety)
                         if grads_block.shape[1] != L:
                             seq_len = grads_block.shape[1]
                             if L <= seq_len:
@@ -558,6 +675,13 @@ def main():
                         gaussian_truncate=args.gaussian_truncate,
                         use_residual=args.residual,
                     )
+                    
+                    # Apply output window extraction if specified
+                    if output_window_size is not None:
+                        grads_block = extract_output_window(grads_block, process_L, args.up_size, args.down_size)
+                        seqs_block = extract_output_window(seqs_block, process_L, args.up_size, args.down_size)
+                    
+                    # Ensure final length matches expected L (this should now be redundant but kept for safety)
                     if grads_block.shape[1] != L:
                         seq_len = grads_block.shape[1]
                         if L <= seq_len:

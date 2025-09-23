@@ -22,27 +22,20 @@ import matplotlib.pyplot as plt
 from scipy.stats import mannwhitneyu
 
 class MotifAnalysisPipeline:
-    def __init__(self, tissue_indices: List[int], grads_dir: str, data_dir: str, output_dir: str, evalue_thresh: float = 0.1, tissues_dict: str = None):
+    def __init__(self, tissue_indices: List[int], grads_dir: str, data_dir: str, output_dir: str, evalue_thresh: float = 0.1):
         self.tissue_indices = [int(ti) for ti in tissue_indices.split(",")]
         self.grads_dir = grads_dir
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.evalue_thresh = evalue_thresh
-        self.tissues_dict = tissues_dict
+        
         # Discover tomtom XML files under the provided directory
         self.tomtom_xml_files = []
         for ti in self.tissue_indices:
-            tissue_dir = os.path.join(self.data_dir, f"tissue_{ti}")
+            tissue_dir = os.path.join(self.data_dir, f"tomtom_tissue_{ti}")
             tomtom_file = os.path.join(tissue_dir, "tomtom.xml")
             if os.path.isdir(tissue_dir) and os.path.exists(tomtom_file):
                 self.tomtom_xml_files.append(tomtom_file)
-        
-        # Tissue name mapping
-        if tissues_dict is not None:
-            with open(tissues_dict, "r") as f:
-                self.tissue_names = json.load(f)
-        else:
-            self.tissue_names = {ti: f"Tissue_{ti}" for ti in self.tissue_indices}
         
         # Data storage
         self.tomtom_matches = None
@@ -51,51 +44,74 @@ class MotifAnalysisPipeline:
     
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def align_ppms(self, query_ppm: List[List[float]], target_ppm: List[List[float]], offset: int) -> Tuple[List[List[float]], List[List[float]]]:
+    def align_ppms(self, query_ppm: List[List[float]], target_ppm: List[List[float]], offset: int, rc: bool = False) -> Tuple[List[List[float]], List[List[float]]]:
         """
-        Align query and target PPMs based on offset to ensure they have the same length.
+        Align query and target PPMs based on offset and reverse complement logic.
+        
+        Logic according to user specification:
+        - If rc=True, reverse complement the target first
+        - Offset is relative to the (potentially reverse complemented) target:
+          * Negative offset: query has extra bases at beginning that should be removed
+          * Positive offset: query needs padding at beginning to align with target
+        - Trim both sequences to shortest length after alignment
+        
+        Examples:
+        - offset=-11, rc=False: query's first 11 bases are extra, start alignment from query[12:]
+        - offset=-2, rc=True: reverse complement target, then query's first 2 bases are extra
+        - offset=+6, rc=False: query needs 6 bases padding at beginning to align with target
+        - offset=+9, rc=True: reverse complement target, then query needs 9 bases padding
         
         Args:
             query_ppm: Query PPM as list of position probability vectors
             target_ppm: Target PPM as list of position probability vectors  
-            offset: Offset from XML (positive means target starts later, negative means query starts later)
+            offset: Offset value (negative = trim query start, positive = pad query start)
+            rc: Whether to reverse complement target before alignment
         
         Returns:
             Tuple of (aligned_query_ppm, aligned_target_ppm) with same length
         """
-        query_len = len(query_ppm)
-        target_len = len(target_ppm)
-        
-        # Calculate the aligned length needed
-        if offset >= 0:
-            # Target starts later, need to pad query at start
-            aligned_length = max(query_len + offset, target_len)
-            query_start_pad = offset
-            target_start_pad = 0
-        else:
-            # Query starts later, need to pad target at start
-            aligned_length = max(target_len - offset, query_len)
-            query_start_pad = 0
-            target_start_pad = -offset
-        
-        # Create aligned PPMs with uniform background (0.25 for each base)
         background = [0.25, 0.25, 0.25, 0.25]
         
-        # Align query PPM
-        aligned_query = []
-        for i in range(aligned_length):
-            if i < query_start_pad or i >= query_start_pad + query_len:
-                aligned_query.append(background)
-            else:
-                aligned_query.append(query_ppm[i - query_start_pad])
+        # Step 1: Apply reverse complement to target if rc=True
+        working_target = target_ppm.copy()
+        if rc:
+            # Reverse complement target: reverse sequence and swap A<->T, C<->G
+            working_target = working_target[::-1]  # Reverse the sequence
+            for i in range(len(working_target)):
+                # Swap A<->T, C<->G (A=0, C=1, G=2, T=3)
+                working_target[i] = [
+                    working_target[i][3],  # T -> A
+                    working_target[i][2],  # G -> C  
+                    working_target[i][1],  # C -> G
+                    working_target[i][0]   # A -> T
+                ]
         
-        # Align target PPM
-        aligned_target = []
-        for i in range(aligned_length):
-            if i < target_start_pad or i >= target_start_pad + target_len:
-                aligned_target.append(background)
+        # Step 2: Apply offset-based alignment to query
+        working_query = query_ppm.copy()
+        
+        if offset < 0:
+            # Negative offset: query has extra bases at beginning, remove |offset| bases
+            trim_amount = abs(offset)
+            if trim_amount >= len(working_query):
+                # If trimming more than query length, return empty alignment
+                working_query = []
             else:
-                aligned_target.append(target_ppm[i - target_start_pad])
+                working_query = working_query[trim_amount:]
+        elif offset > 0:
+            # Positive offset: query needs padding at beginning to align with target
+            padding = [background] * offset
+            working_query = padding + working_query
+        # offset == 0: no change needed
+        
+        # Step 3: Trim both sequences to shortest length to ensure proper alignment
+        min_length = min(len(working_query), len(working_target))
+        
+        if min_length == 0:
+            # Handle edge case where one sequence becomes empty
+            return [], []
+        
+        aligned_query = working_query[:min_length]
+        aligned_target = working_target[:min_length]
         
         return aligned_query, aligned_target
 
@@ -176,7 +192,8 @@ class MotifAnalysisPipeline:
                         # Align PPMs based on offset
                         query_ppm = query_motifs[q_idx]["ppm"]
                         target_ppm = target_motifs[t_idx]["ppm"]
-                        aligned_query_ppm, aligned_target_ppm = self.align_ppms(query_ppm, target_ppm, offset)
+                        rc = (t.attrib["rc"] == "y")
+                        aligned_query_ppm, aligned_target_ppm = self.align_ppms(query_ppm, target_ppm, offset, rc)
                         
                         all_rows.append({
                             "Tissue_Index": tissue_idx,
@@ -185,7 +202,7 @@ class MotifAnalysisPipeline:
                             "Pattern_Index": pattern_index,
                             "Target_ID": target_motifs[t_idx]["id"],
                             "Jaspar_Name": target_motifs[t_idx]["alt"],
-                            "rc": (t.attrib["rc"] == "y"),
+                            "rc": rc,
                             "P_value": pv,
                             "E_value": ev,
                             "Q_value": qv,
@@ -247,7 +264,7 @@ class MotifAnalysisPipeline:
                     print(f"Warning: Could not parse Query_ID {query_id}")
                     continue
                 
-                modisco_file = f"{self.data_dir}/tissue_{tissue_idx}.lite.h5"
+                modisco_file = f"{self.data_dir}/modiscolite_tissue_{tissue_idx}.h5"
                 
                 if not os.path.exists(modisco_file):
                     print(f"Warning: Modisco file not found: {modisco_file}")
@@ -506,6 +523,20 @@ class MotifAnalysisPipeline:
                     else:
                         th_grp.create_dataset(col, data=vals)
             
+            # Save individual seqlet saliency scores if available
+            if hasattr(self, 'seqlet_saliency_df') and self.seqlet_saliency_df is not None and len(self.seqlet_saliency_df) > 0:
+                ss_grp = analysis_grp.create_group("seqlet_saliency_scores")
+                
+                def _to_bytes_array(arr):
+                    return np.asarray([str(x).encode("utf-8") for x in arr])
+                
+                for col in self.seqlet_saliency_df.columns:
+                    vals = self.seqlet_saliency_df[col].values
+                    if col in ["Jaspar_Name"]:
+                        ss_grp.create_dataset(col, data=_to_bytes_array(vals), compression="gzip")
+                    else:
+                        ss_grp.create_dataset(col, data=vals)
+            
             # Note: tissue_saliency_scores is deprecated in favor of cross_tissue_stats_df
             # The old structure is no longer used in the new pipeline
         
@@ -534,22 +565,21 @@ class MotifAnalysisPipeline:
                 return None
             try:
                 with h5py.File(grads_file, "r") as f:
-                    arr = f["grads_saliency"][:]
-                # Assume fixed layout [N, L, D, T]
-                grads_cache[tissue_idx] = arr
-                print(f"Loaded grads for tissue {tissue_idx}: {arr.shape}")
-                return arr
+                    grads_cache[tissue_idx] = f["grads_saliency"][:]
+                return grads_cache[tissue_idx]
             except Exception as e:
-                print(f"Error reading grads from {grads_file}: {e}")
+                print(f"Error loading grads file {grads_file}: {e}")
                 grads_cache[tissue_idx] = None
                 return None
-        
+
         # Pre-load all needed grads files
         for tissue_idx in self.tissue_indices:
             get_tissue_grads(int(tissue_idx))
 
         records = []
         wilcoxon_rows = []
+        # Store individual seqlet saliency scores for plotting
+        seqlet_saliency_records = []
 
         total_motifs = self.merged_seqlets_df['jaspar_name'].nunique()
         print(f"Processing {total_motifs} motifs...")
@@ -562,7 +592,7 @@ class MotifAnalysisPipeline:
             # For each seqlet, read grads from its origin-tissue file and slice last dim by selected tissue
             tissue_to_scores = {int(ti): [] for ti in self.tissue_indices}
 
-            for _, row in motif_seqlets.iterrows():
+            for seqlet_idx, row in motif_seqlets.iterrows():
                 try:
                     origin_tissue = int(row["tissue_idx"])  # grads N dimension belongs to this origin tissue
                     grads_arr = get_tissue_grads(origin_tissue)
@@ -578,7 +608,19 @@ class MotifAnalysisPipeline:
                         if sel_t >= grads_arr.shape[3]:
                             continue
                         window = grads_arr[ex, st:en, :, sel_t]
-                        tissue_to_scores[sel_t].append(float(np.mean(window)))
+                        saliency_score = float(np.mean(window))
+                        tissue_to_scores[sel_t].append(saliency_score)
+                        
+                        # Store individual seqlet saliency score for plotting
+                        seqlet_saliency_records.append({
+                            "Jaspar_Name": jaspar_name,
+                            "Tissue": int(sel_t),
+                            "Origin_Tissue": int(origin_tissue),
+                            "Example_Idx": int(ex),
+                            "Start": int(st),
+                            "End": int(en),
+                            "Saliency_Score": saliency_score
+                        })
                 except Exception:
                     continue
 
@@ -642,7 +684,10 @@ class MotifAnalysisPipeline:
 
         self.cross_tissue_stats_df = pd.DataFrame.from_records(records)
         self.wilcoxon_results_df = pd.DataFrame.from_records(wilcoxon_rows)
+        # Store individual seqlet saliency scores
+        self.seqlet_saliency_df = pd.DataFrame.from_records(seqlet_saliency_records)
         print(f"Computed cross-tissue stats for {self.cross_tissue_stats_df['Jaspar_Name'].nunique() if len(self.cross_tissue_stats_df)>0 else 0} motifs")
+        print(f"Stored {len(self.seqlet_saliency_df)} individual seqlet saliency scores for plotting")
         return self.cross_tissue_stats_df
 
     def select_top_hits(self, alpha: float = 0.05) -> pd.DataFrame:
@@ -661,14 +706,28 @@ class MotifAnalysisPipeline:
             pval = float(row["P_value"]) if not pd.isna(row["P_value"]) else 1.0
             # significance by Wilcoxon only (E-value already filtered)
             if pval <= alpha:
-                # Get target_id from motif_metadata
+                # Get target_id, best_evalue, and direction from motif_metadata
                 target_id = None
+                best_evalue = None
+                direction = None
                 if hasattr(self, 'motif_metadata') and jaspar in self.motif_metadata:
-                    target_id = self.motif_metadata[jaspar].get("target_id")
+                    metadata = self.motif_metadata[jaspar]
+                    target_id = metadata.get("target_id")
+                    best_evalue = metadata.get("best_evalue")
+                    # Get direction from tomtom_matches for the best match
+                    if hasattr(self, 'tomtom_matches') and self.tomtom_matches is not None:
+                        best_match = self.tomtom_matches[
+                            (self.tomtom_matches["Jaspar_Name"] == jaspar) & 
+                            (self.tomtom_matches["E_value"] == best_evalue)
+                        ]
+                        if len(best_match) > 0:
+                            direction = "reverse" if best_match.iloc[0]["rc"] else "forward"
                 
                 hits.append({
                     "Jaspar_Name": jaspar,
                     "Target_ID": target_id,
+                    "Best_Evalue": best_evalue,
+                    "Direction": direction,
                     "Top_Tissue": top_t,
                     "Wilcoxon_P": pval,
                     "Top_P95": float(row["Top_P95"]),
@@ -679,76 +738,6 @@ class MotifAnalysisPipeline:
         self.top_hits_df = pd.DataFrame.from_records(hits)
         print(f"Selected {len(self.top_hits_df)} top-hit motifs")
         return self.top_hits_df
-    
-    def analyze_tissue_specificity(self) -> pd.DataFrame:
-        """Analyze tissue specificity of motifs based on saliency score distributions."""
-        print("Analyzing tissue specificity...")
-        
-        if self.tissue_saliency_scores is None:
-            raise ValueError("Must compute saliency scores first")
-        
-        specificity_analysis = []
-        
-        for jaspar_name, motif_data in self.tissue_saliency_scores.items():
-            tissues_with_data = list(motif_data["tissues"].keys())
-            
-            if len(tissues_with_data) < 2:
-                continue
-            
-            # Compare distributions between tissues
-            for i, tissue1 in enumerate(tissues_with_data):
-                for tissue2 in tissues_with_data[i+1:]:
-                    scores1 = motif_data["tissues"][tissue1]["saliency_scores"]
-                    scores2 = motif_data["tissues"][tissue2]["saliency_scores"]
-                    
-                    if len(scores1) > 0 and len(scores2) > 0:
-                        # Compute effect size (Cohen's d)
-                        pooled_std = np.sqrt(((len(scores1) - 1) * np.var(scores1) + 
-                                            (len(scores2) - 1) * np.var(scores2)) / 
-                                           (len(scores1) + len(scores2) - 2))
-                        
-                        if pooled_std > 0:
-                            cohens_d = (np.mean(scores1) - np.mean(scores2)) / pooled_std
-                        else:
-                            cohens_d = 0.0
-                        
-                        # Determine which tissue has higher scores
-                        if np.mean(scores1) > np.mean(scores2):
-                            higher_tissue = tissue1
-                            lower_tissue = tissue2
-                            higher_mean = np.mean(scores1)
-                            lower_mean = np.mean(scores2)
-                        else:
-                            higher_tissue = tissue2
-                            lower_tissue = tissue1
-                            higher_mean = np.mean(scores2)
-                            lower_mean = np.mean(scores1)
-                        
-                        specificity_analysis.append({
-                            "Jaspar_Name": jaspar_name,
-                            "Tissue1": tissue1,
-                            "Tissue2": tissue2,
-                            "Tissue1_Mean": float(np.mean(scores1)),
-                            "Tissue2_Mean": float(np.mean(scores2)),
-                            "Higher_Tissue": higher_tissue,
-                            "Lower_Tissue": lower_tissue,
-                            "Higher_Mean": float(higher_mean),
-                            "Lower_Mean": float(lower_mean),
-                            "Effect_Size": float(cohens_d),
-                            "Tissue1_n": len(scores1),
-                            "Tissue2_n": len(scores2),
-                            "Fold_Change": float(higher_mean / lower_mean) if lower_mean > 0 else float('inf')
-                        })
-        
-        specificity_df = pd.DataFrame(specificity_analysis)
-        
-        # Add tissue names
-        specificity_df["Tissue1_Name"] = specificity_df["Tissue1"].map(self.tissue_names)
-        specificity_df["Tissue2_Name"] = specificity_df["Tissue2"].map(self.tissue_names)
-        specificity_df["Higher_Tissue_Name"] = specificity_df["Higher_Tissue"].map(self.tissue_names)
-        
-        print(f"Analyzed tissue specificity for {len(specificity_df)} motif-tissue comparisons")
-        return specificity_df
     
     def save_results(self, output_dir: str = None):
         """Save all results to files.
@@ -795,6 +784,11 @@ class MotifAnalysisPipeline:
             self.top_hits_df.to_csv(f"{output_dir}/top_hits.tsv", sep="\t", index=False)
             print(f"Saved top hits to {output_dir}/top_hits.tsv")
         
+        # Save individual seqlet saliency scores if available
+        if hasattr(self, 'seqlet_saliency_df') and self.seqlet_saliency_df is not None:
+            self.seqlet_saliency_df.to_csv(f"{output_dir}/seqlet_saliency_scores.tsv", sep="\t", index=False)
+            print(f"Saved seqlet saliency scores to {output_dir}/seqlet_saliency_scores.tsv")
+        
         print("Results saved successfully!")
     
 
@@ -834,7 +828,6 @@ def main():
     parser.add_argument("--data_dir", required=True, help="modisco results, tomtom results directory path")
     parser.add_argument("--evalue_thresh", type=float, default=0.1, help="E-value threshold for Tomtom matches")
     parser.add_argument("--output_dir", default="motif_analysis_results", help="Output directory")
-    parser.add_argument("--tissues_dict", default=None, help="Tissues dictionary file for mapping tissue indices to names")
 
     
     
@@ -843,7 +836,7 @@ def main():
     # Create pipeline and run
     pipeline = MotifAnalysisPipeline(
         args.tissue_indices, args.grads_dir, args.data_dir, 
-        args.output_dir, args.evalue_thresh, args.tissues_dict)
+        args.output_dir, args.evalue_thresh)
     results = pipeline.run_pipeline()
     
     print(f"\nPipeline Summary:")

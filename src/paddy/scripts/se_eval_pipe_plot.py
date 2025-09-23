@@ -198,7 +198,7 @@ def create_heatmaps(df, args, metrics):
         pivot_data = pivot_data.loc[row_order, col_order]
         
         # Create heatmap with appropriate colormap
-        cmap = 'coolwarm_r' if metric == 'test_loss' else 'coolwarm'
+        cmap = 'RdBu_r'
         ax = sns.heatmap(pivot_data, annot=True, fmt=".3f", cmap=cmap, 
                          linewidths=.5, annot_kws={"size": 8})
         
