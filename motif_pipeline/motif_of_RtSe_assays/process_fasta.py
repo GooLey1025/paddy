@@ -185,7 +185,7 @@ def process_fasta_file(input_file, output_all_genes, output_motif_dict):
 
 if __name__ == "__main__":
     input_file = "Genes_with_Nmask.seq.fa"
-    output_all_genes = "all_genes.fa"
+    output_all_genes = "WetExp_genes.fa"
     output_motif_dict = "motif_info.json"
     
     all_genes, motif_dict = process_fasta_file(input_file, output_all_genes, output_motif_dict)

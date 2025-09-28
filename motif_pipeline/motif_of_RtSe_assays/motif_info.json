@@ -1,0 +1,586 @@
+{
+  "LOC_Os01g27940": [
+    {
+      "motif_id": "MA1247.2",
+      "motif_name": "ERF087",
+      "masked_sequence": "CGCCGCCGCC",
+      "position": -220,
+      "absolute_start": 16153,
+      "absolute_end": 16162,
+      "normalized_start": -231,
+      "normalized_end": -222
+    }
+  ],
+  "LOC_Os12g41950": [
+    {
+      "motif_id": "MA1239.2",
+      "motif_name": "ERF104",
+      "masked_sequence": "GCGGCGGCGGCGGCTG",
+      "position": -513,
+      "absolute_start": 15854,
+      "absolute_end": 15869,
+      "normalized_start": -530,
+      "normalized_end": -515
+    }
+  ],
+  "LOC_Os02g35190": [
+    {
+      "motif_id": "MA1257.2",
+      "motif_name": "ERF9",
+      "masked_sequence": "CAAAGCGGCGGCGGCGGCG",
+      "position": -11,
+      "absolute_start": 16353,
+      "absolute_end": 16371,
+      "normalized_start": -31,
+      "normalized_end": -13
+    }
+  ],
+  "LOC_Os06g46030": [
+    {
+      "motif_id": "MA1355.2",
+      "motif_name": "TRB2",
+      "masked_sequence": "AAACCCTAGTT",
+      "position": -352,
+      "absolute_start": 16020,
+      "absolute_end": 16030,
+      "normalized_start": -364,
+      "normalized_end": -354
+    }
+  ],
+  "LOC_Os05g51510": [
+    {
+      "motif_id": "MA1772.2",
+      "motif_name": "MYB43",
+      "masked_sequence": "CTCACCTACCTC",
+      "position": -134,
+      "absolute_start": 16237,
+      "absolute_end": 16248,
+      "normalized_start": -147,
+      "normalized_end": -136
+    }
+  ],
+  "LOC_Os06g37560": [
+    {
+      "motif_id": "MA1404.1",
+      "motif_name": "BPC1",
+      "masked_sequence": "TCTCCTTCTCCTTCTCCTTCTTCT",
+      "position": -87,
+      "absolute_start": 16272,
+      "absolute_end": 16295,
+      "normalized_start": -112,
+      "normalized_end": -89
+    },
+    {
+      "motif_id": "MA1239.2",
+      "motif_name": "ERF104",
+      "masked_sequence": "CCACCACCACCACCGC",
+      "position": -130,
+      "absolute_start": 16237,
+      "absolute_end": 16252,
+      "normalized_start": -147,
+      "normalized_end": -132
+    }
+  ],
+  "LOC_Os05g04820": [
+    {
+      "motif_id": "MA1768.2",
+      "motif_name": "MYB30",
+      "masked_sequence": "ACAACCACCACC",
+      "position": -340,
+      "absolute_start": 16031,
+      "absolute_end": 16042,
+      "normalized_start": -353,
+      "normalized_end": -342
+    }
+  ],
+  "LOC_Os03g04920": [
+    {
+      "motif_id": "MA2398.1",
+      "motif_name": "AS2",
+      "masked_sequence": "CTGCCTTCTGCCCCGCCG",
+      "position": -92,
+      "absolute_start": 16273,
+      "absolute_end": 16290,
+      "normalized_start": -111,
+      "normalized_end": -94
+    },
+    {
+      "motif_id": "MA1221.1",
+      "motif_name": "RAP2-6",
+      "masked_sequence": "AACCCGCCGCCGCCC",
+      "position": -137,
+      "absolute_start": 16231,
+      "absolute_end": 16245,
+      "normalized_start": -153,
+      "normalized_end": -139
+    }
+  ],
+  "LOC_Os03g06120": [
+    {
+      "motif_id": "MA1404.1",
+      "motif_name": "BPC1",
+      "masked_sequence": "GTGGGAAGAAGAAGAAGAAGAAGA",
+      "position": -18,
+      "absolute_start": 16341,
+      "absolute_end": 16364,
+      "normalized_start": -43,
+      "normalized_end": -20
+    }
+  ],
+  "LOC_Os04g10750": [
+    {
+      "motif_id": "MA1317.2",
+      "motif_name": "WRKY50",
+      "masked_sequence": "AAAAGTCAA",
+      "position": -1368,
+      "absolute_start": 15006,
+      "absolute_end": 15014,
+      "normalized_start": -1378,
+      "normalized_end": -1370
+    },
+    {
+      "motif_id": "MA1267.2",
+      "motif_name": "DOF5.8",
+      "masked_sequence": "TTTCTTTTCTGAACTTTTT",
+      "position": -722,
+      "absolute_start": 15642,
+      "absolute_end": 15660,
+      "normalized_start": -742,
+      "normalized_end": -724
+    }
+  ],
+  "LOC_Os01g52500": [
+    {
+      "motif_id": "MA1285.2",
+      "motif_name": "TCP9",
+      "masked_sequence": "GCGGGGCCCGC",
+      "position": -405,
+      "absolute_start": 15967,
+      "absolute_end": 15977,
+      "normalized_start": -417,
+      "normalized_end": -407
+    },
+    {
+      "motif_id": "MA1402.1",
+      "motif_name": "BPC6",
+      "masked_sequence": "CTAAATCTCTCTCTCTCTCCT",
+      "position": -329,
+      "absolute_start": 16033,
+      "absolute_end": 16053,
+      "normalized_start": -351,
+      "normalized_end": -331
+    }
+  ],
+  "LOC_Os01g66120": [
+    {
+      "motif_id": "MA2014.2",
+      "motif_name": "BAM8",
+      "masked_sequence": "CACACGTGT",
+      "position": -158,
+      "absolute_start": 16216,
+      "absolute_end": 16224,
+      "normalized_start": -168,
+      "normalized_end": -160
+    }
+  ],
+  "LOC_Os02g02860": [
+    {
+      "motif_id": "MA1267.2",
+      "motif_name": "DOF5.8",
+      "masked_sequence": "CTTCTTCTTCTTCCTTTTC",
+      "position": -28,
+      "absolute_start": 16336,
+      "absolute_end": 16354,
+      "normalized_start": -48,
+      "normalized_end": -30
+    },
+    {
+      "motif_id": "MA1274.1",
+      "motif_name": "DOF3.6",
+      "masked_sequence": "TATTCTTTTCTTTTCTTTTCA",
+      "position": -281,
+      "absolute_start": 16081,
+      "absolute_end": 16101,
+      "normalized_start": -303,
+      "normalized_end": -283
+    }
+  ],
+  "LOC_Os03g10650": [
+    {
+      "motif_id": "MA1222.1",
+      "motif_name": "ERF014",
+      "masked_sequence": "AGGCGGCGGAGGAGG",
+      "position": -149,
+      "absolute_start": 16219,
+      "absolute_end": 16233,
+      "normalized_start": -165,
+      "normalized_end": -151
+    },
+    {
+      "motif_id": "MA1403.1",
+      "motif_name": "BPC5",
+      "masked_sequence": "CTCTCTCTCTCTCTCTCTCTCTCTCTCTCT",
+      "position": -284,
+      "absolute_start": 16069,
+      "absolute_end": 16098,
+      "normalized_start": -315,
+      "normalized_end": -286
+    }
+  ],
+  "LOC_Os03g43930": [
+    {
+      "motif_id": "MA1257.2",
+      "motif_name": "ERF9",
+      "masked_sequence": "CACCTCCTCCTCCTCCTCC",
+      "position": -229,
+      "absolute_start": 16135,
+      "absolute_end": 16153,
+      "normalized_start": -249,
+      "normalized_end": -231
+    },
+    {
+      "motif_id": "MA1402.1",
+      "motif_name": "BPC6",
+      "masked_sequence": "CCCCTTCTCTCTCCTCCTCTA",
+      "position": -287,
+      "absolute_start": 16075,
+      "absolute_end": 16095,
+      "normalized_start": -309,
+      "normalized_end": -289
+    }
+  ],
+  "LOC_Os05g15770": [
+    {
+      "motif_id": "MA0994.3",
+      "motif_name": "ERF8",
+      "masked_sequence": "CGCCGGCGGCG",
+      "position": -166,
+      "absolute_start": 16206,
+      "absolute_end": 16216,
+      "normalized_start": -178,
+      "normalized_end": -168
+    }
+  ],
+  "LOC_Os06g12230": [
+    {
+      "motif_id": "MA1685.2",
+      "motif_name": "ARF10",
+      "masked_sequence": "CGTCTCCCCCT",
+      "position": -499,
+      "absolute_start": 15873,
+      "absolute_end": 15883,
+      "normalized_start": -511,
+      "normalized_end": -501
+    },
+    {
+      "motif_id": "MA2418.1",
+      "motif_name": "IG1",
+      "masked_sequence": "TGGCGGCGG",
+      "position": -156,
+      "absolute_start": 16218,
+      "absolute_end": 16226,
+      "normalized_start": -166,
+      "normalized_end": -158
+    }
+  ],
+  "LOC_Os06g36560": [
+    {
+      "motif_id": "MA1416.1",
+      "motif_name": "RAMOSA1",
+      "masked_sequence": "TCTCTCTCTCGCTG",
+      "position": -249,
+      "absolute_start": 16120,
+      "absolute_end": 16133,
+      "normalized_start": -264,
+      "normalized_end": -251
+    },
+    {
+      "motif_id": "MA1815.2",
+      "motif_name": "GRF4",
+      "masked_sequence": "GCAGCAGC",
+      "position": -166,
+      "absolute_start": 16209,
+      "absolute_end": 16216,
+      "normalized_start": -175,
+      "normalized_end": -168
+    }
+  ],
+  "LOC_Os08g08120": [
+    {
+      "motif_id": "MA1257.2",
+      "motif_name": "ERF9",
+      "masked_sequence": "CTCCACCGCCAGTAGTGCC",
+      "position": -159,
+      "absolute_start": 16205,
+      "absolute_end": 16223,
+      "normalized_start": -179,
+      "normalized_end": -161
+    }
+  ],
+  "LOC_Os09g29840": [
+    {
+      "motif_id": "MA0567.1",
+      "motif_name": "ERF1B",
+      "masked_sequence": "CGCCGCCA",
+      "position": -211,
+      "absolute_start": 16164,
+      "absolute_end": 16171,
+      "normalized_start": -220,
+      "normalized_end": -213
+    },
+    {
+      "motif_id": "MA2408.1",
+      "motif_name": "BAD1",
+      "masked_sequence": "CCGCGACCCCAC",
+      "position": -270,
+      "absolute_start": 16101,
+      "absolute_end": 16112,
+      "normalized_start": -283,
+      "normalized_end": -272
+    }
+  ],
+  "LOC_Os11g08210": [
+    {
+      "motif_id": "MA1686.1",
+      "motif_name": "ARF13",
+      "masked_sequence": "ACGTGTCCCCCCTC",
+      "position": -140,
+      "absolute_start": 16229,
+      "absolute_end": 16242,
+      "normalized_start": -155,
+      "normalized_end": -142
+    }
+  ],
+  "LOC_Os01g52050": [
+    {
+      "motif_id": "MA1404.1",
+      "motif_name": "BPC1",
+      "masked_sequence": "TCTCTTTCTCTCTCTCTCCATCTC",
+      "position": -114,
+      "absolute_start": 16245,
+      "absolute_end": 16268,
+      "normalized_start": -139,
+      "normalized_end": -116
+    }
+  ],
+  "LOC_Os03g62110": [
+    {
+      "motif_id": "MA2024.2",
+      "motif_name": "MYB63",
+      "masked_sequence": "CCACCTACCAC",
+      "position": -54,
+      "absolute_start": 16318,
+      "absolute_end": 16328,
+      "normalized_start": -66,
+      "normalized_end": -56
+    }
+  ],
+  "LOC_Os10g41230": [
+    {
+      "motif_id": "MA1768.2",
+      "motif_name": "MYB30",
+      "masked_sequence": "CCAACCACCACC",
+      "position": -85,
+      "absolute_start": 16286,
+      "absolute_end": 16297,
+      "normalized_start": -98,
+      "normalized_end": -87
+    }
+  ],
+  "LOC_Os06g05110": [
+    {
+      "motif_id": "MA1278.2",
+      "motif_name": "DOF3.4",
+      "masked_sequence": "TTCGATTTTTTCTTTTG",
+      "position": -47,
+      "absolute_start": 16319,
+      "absolute_end": 16335,
+      "normalized_start": -65,
+      "normalized_end": -49
+    },
+    {
+      "motif_id": "MA1402.1",
+      "motif_name": "BPC6",
+      "masked_sequence": "ATGAGATAGAGACGAAGTGAA",
+      "position": -76,
+      "absolute_start": 16286,
+      "absolute_end": 16306,
+      "normalized_start": -98,
+      "normalized_end": -78
+    }
+  ],
+  "LOC_Os01g16040": [
+    {
+      "motif_id": "MA0576.2",
+      "motif_name": "RAX3",
+      "masked_sequence": "CAACCAACCCCC",
+      "position": -185,
+      "absolute_start": 16186,
+      "absolute_end": 16197,
+      "normalized_start": -198,
+      "normalized_end": -187
+    }
+  ],
+  "LOC_Os02g10780": [
+    {
+      "motif_id": "MA1384.1",
+      "motif_name": "PHL7",
+      "masked_sequence": "CGAATATTCCTCT",
+      "position": -141,
+      "absolute_start": 16229,
+      "absolute_end": 16241,
+      "normalized_start": -155,
+      "normalized_end": -143
+    }
+  ],
+  "LOC_Os01g50410": [
+    {
+      "motif_id": "MA1361.2",
+      "motif_name": "bHLH18",
+      "masked_sequence": "CACGTGTTGCACACG",
+      "position": -129,
+      "absolute_start": 16239,
+      "absolute_end": 16253,
+      "normalized_start": -145,
+      "normalized_end": -131
+    }
+  ],
+  "LOC_Os01g07500": [
+    {
+      "motif_id": "MA1267.2",
+      "motif_name": "DOF5.8",
+      "masked_sequence": "AAAAAGAAGAAGAAGAAGA",
+      "position": -30,
+      "absolute_start": 16334,
+      "absolute_end": 16352,
+      "normalized_start": -50,
+      "normalized_end": -32
+    }
+  ],
+  "LOC_Os04g58620": [
+    {
+      "motif_id": "MA1403.1",
+      "motif_name": "BPC5",
+      "masked_sequence": "AAACAGAGGCAGAGAGAGATGGGAAGGGAA",
+      "position": -362,
+      "absolute_start": 15991,
+      "absolute_end": 16020,
+      "normalized_start": -393,
+      "normalized_end": -364
+    }
+  ],
+  "LOC_Os01g56420": [
+    {
+      "motif_id": "MA2450.1",
+      "motif_name": "SPL7A",
+      "masked_sequence": "GTACTACCACT",
+      "position": -126,
+      "absolute_start": 16246,
+      "absolute_end": 16256,
+      "normalized_start": -138,
+      "normalized_end": -128
+    },
+    {
+      "motif_id": "MA1792.1",
+      "motif_name": "NAC098",
+      "masked_sequence": "CGTGTGTAGTACGGTA",
+      "position": -143,
+      "absolute_start": 16224,
+      "absolute_end": 16239,
+      "normalized_start": -160,
+      "normalized_end": -145
+    }
+  ],
+  "LOC_Os01g09830": [
+    {
+      "motif_id": "MA1257.2",
+      "motif_name": "ERF9",
+      "masked_sequence": "CGCCACCGCCGCCGCCGCC",
+      "position": -49,
+      "absolute_start": 16315,
+      "absolute_end": 16333,
+      "normalized_start": -69,
+      "normalized_end": -51
+    }
+  ],
+  "LOC_Os09g19830": [
+    {
+      "motif_id": "MA1754.2",
+      "motif_name": "ERF073",
+      "masked_sequence": "CGCCGCCGCCG",
+      "position": -239,
+      "absolute_start": 16133,
+      "absolute_end": 16143,
+      "normalized_start": -251,
+      "normalized_end": -241
+    }
+  ],
+  "LOC_Os10g36848": [
+    {
+      "motif_id": "MA1759.2",
+      "motif_name": "HSFA4A",
+      "masked_sequence": "TTCTAGAATATTAT",
+      "position": -41,
+      "absolute_start": 16328,
+      "absolute_end": 16341,
+      "normalized_start": -56,
+      "normalized_end": -43
+    }
+  ],
+  "LOC_Os03g55800": [
+    {
+      "motif_id": "MA1245.3",
+      "motif_name": "ERF112",
+      "masked_sequence": "CCGCCGCCG",
+      "position": -335,
+      "absolute_start": 16039,
+      "absolute_end": 16047,
+      "normalized_start": -345,
+      "normalized_end": -337
+    }
+  ],
+  "LOC_Os01g08300": [
+    {
+      "motif_id": "MA2039.2",
+      "motif_name": "ASIL2",
+      "masked_sequence": "CTCCGGCGG",
+      "position": -16,
+      "absolute_start": 16358,
+      "absolute_end": 16366,
+      "normalized_start": -26,
+      "normalized_end": -18
+    },
+    {
+      "motif_id": "MA1228.2",
+      "motif_name": "ERF091",
+      "masked_sequence": "CCGGCGGCCGCGG",
+      "position": -10,
+      "absolute_start": 16360,
+      "absolute_end": 16372,
+      "normalized_start": -24,
+      "normalized_end": -12
+    }
+  ],
+  "LOC_Os08g29660": [
+    {
+      "motif_id": "MA1403.1",
+      "motif_name": "BPC5",
+      "masked_sequence": "CTCTCCCTCTCCTTCCTCCTCCTCCTCGTC",
+      "position": -103,
+      "absolute_start": 16250,
+      "absolute_end": 16279,
+      "normalized_start": -134,
+      "normalized_end": -105
+    },
+    {
+      "motif_id": "MA2013.2",
+      "motif_name": "ERF115",
+      "masked_sequence": "TGCGACGGCGA",
+      "position": -53,
+      "absolute_start": 16319,
+      "absolute_end": 16329,
+      "normalized_start": -65,
+      "normalized_end": -55
+    }
+  ]
+}
