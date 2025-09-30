@@ -314,7 +314,7 @@ def plot_global_gradients(gene_idx, gene_id, grads_saliency, tissue_dict,
 
 def plot_motif_comprehensive_view(gene_idx, gene_id, grads_saliency, gene_sequence, 
                                  motif_info, tissue_dict, logo_width=192, save_dir="output", 
-                                 output_format="pdf", fig_width=20):
+                                 output_format="pdf", fig_width=20, y_min=-0.15, y_max=0.15):
     """Plot comprehensive view: global gradients + combined sequence logo for all motifs organized by tissue"""
     
     gene_motifs = motif_info.get(gene_id, [])
@@ -422,6 +422,8 @@ def plot_motif_comprehensive_view(gene_idx, gene_id, grads_saliency, gene_sequen
             logo_grads,
             ax=ax_logo,
             plot_y_ticks=False,
+            y_min=y_min,
+            y_max=y_max,
             center_marker=False,
             title=None,
             remove_spines=True
@@ -471,7 +473,7 @@ def plot_motif_comprehensive_view(gene_idx, gene_id, grads_saliency, gene_sequen
 
 def process_single_gene(args):
     """Process a single gene for multiprocessing"""
-    gene_idx, gene_id, gene_sequence, gene_motifs, grads_data, tissue_dict, save_dir, output_format, fig_width = args
+    gene_idx, gene_id, gene_sequence, gene_motifs, grads_data, tissue_dict, save_dir, output_format, fig_width, y_min, y_max = args
     
     # Force matplotlib to use Agg backend in worker process
     import matplotlib
@@ -484,7 +486,7 @@ def process_single_gene(args):
             comprehensive_fig = plot_motif_comprehensive_view(
                 gene_idx, gene_id, grads_data, gene_sequence,
                 {gene_id: gene_motifs}, tissue_dict, save_dir=save_dir, output_format=output_format,
-                fig_width=fig_width
+                fig_width=fig_width, y_min=y_min, y_max=y_max
             )
             if comprehensive_fig:
                 plt.close(comprehensive_fig)
@@ -502,7 +504,7 @@ def process_single_gene(args):
 def visualize_all_genes(max_genes=None, save_dir="output", output_format="pdf",
                        h5_file='all_genes.h5', motif_json='motif_info.json', 
                        fasta_file='all_genes.fa', tissue_dict_file='../23tissues_dict.json',
-                       n_processes=48, fig_width=20):
+                       n_processes=48, fig_width=20, y_min=-0.15, y_max=0.15):
     """Main function to visualize all genes using multiprocessing"""
     
     print("Starting motif visualization...")
@@ -538,18 +540,18 @@ def visualize_all_genes(max_genes=None, save_dir="output", output_format="pdf",
             gene_grads = grads_saliency[gene_idx:gene_idx+1, :, :, :]  # Keep 4D shape but only 1 gene
             args_list.append((
                 0, gene_id, gene_sequence, gene_motifs, 
-                gene_grads, tissue_dict, save_dir, output_format, fig_width
+                gene_grads, tissue_dict, save_dir, output_format, fig_width, y_min, y_max
             ))
             genes_with_motifs += 1
         elif gene_motifs:
             args_list.append((
                 gene_idx, gene_id, "", gene_motifs, 
-                None, tissue_dict, save_dir, output_format, fig_width
+                None, tissue_dict, save_dir, output_format, fig_width, y_min, y_max
             ))
         else:
             args_list.append((
                 gene_idx, gene_id, gene_sequence, [], 
-                None, tissue_dict, save_dir, output_format, fig_width
+                None, tissue_dict, save_dir, output_format, fig_width, y_min, y_max
             ))
     
     print(f"Found {genes_with_motifs} genes with motifs to process")
@@ -607,6 +609,10 @@ if __name__ == "__main__":
                        help='Number of processes for parallel processing (default: %default)')
     parser.add_argument('--fig_width', type=float, default=18,
                        help='Figure width in inches for global gradients (default: %default)')
+    parser.add_argument('--y_min', type=float, default=-0.15,
+                       help='Minimum Y-axis limit for sequence logos (default: %default)')
+    parser.add_argument('--y_max', type=float, default=0.15,
+                       help='Maximum Y-axis limit for sequence logos (default: %default)')
     
     args = parser.parse_args()
     
@@ -615,4 +621,4 @@ if __name__ == "__main__":
                        output_format=args.output_format, h5_file=args.h5_file,
                        motif_json=args.motif_json, fasta_file=args.fasta_file,
                        tissue_dict_file=args.tissue_dict, n_processes=args.processes,
-                       fig_width=args.fig_width)
+                       fig_width=args.fig_width, y_min=args.y_min, y_max=args.y_max)

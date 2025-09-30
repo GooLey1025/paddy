@@ -13,7 +13,7 @@ mkdir -p $grads_dir
 IFS=',' read -ra INDICES <<< $TISSUE_INDICES
 for i in ${INDICES[@]}; do
     paddy_grad_fa.py \
-    --model_path ../seq2exp/best_model_dirs/34P_23tracks_34P_TrunkFrozen_PaddyHead_best_model_dir/seed100_model_best.h5 \
+    --model_path ../seq2exp/best_model_dirs/34Prp1_23tracks_34P_TrunkFrozen_PaddyHead_best_model_dir/seed100_model_best.h5 \
     ../seq2exp/transfer_CE_PaddyHead.yaml \
     -o $grads_dir/tissue_${i}.h5 \
     diff_expr/tissue_${i}_top_genes.fa
@@ -23,27 +23,52 @@ preprocess_for_modisco.py \
     --grad_dir $grads_dir \
     --tissue_indices $TISSUE_INDICES \
     -o ${grads_dir} \
-    --out_format npy \
+    --out_format h5 \
     --center_size 32768 \
     --residual \
     --gaussian_sigma 1280 \
     --gaussian_truncate 2.0 \
     --split_by_tissues
+    -- up_size 2000
 
-mkdir -p modiscolite_${grads_dir}_results
+export WINDOW=32768 # The length of your input scores of interest
+export window_grads_dir=${WINDOW}_${grads_dir}
+
+# And modify -i ${grads_dir} below
+mkdir -p modiscolite_${window_grads_dir}_results
 parallel -j 5 --bar --halt now,fail=1 \
     modisco motifs \
         -i ${grads_dir}/modisco_preprocessed_tissue_{}.h5 \
-        -o modiscolite_${grads_dir}/modiscolite_tissue_{}.h5 \
-        -w 400 -n 40000 -t 24 -g 8 -z 18 -f 8 -v \
+        -o modiscolite_${window_grads_dir}_results/modiscolite_tissue_{}.h5 \
+        -w $WINDOW -n 40000 -t 24 -g 8 -z 18 -f 8 -v \
     ::: ${TISSUE_INDICES//,/ }
 
-for i in $(echo $TISSUE_INDICES | tr ',' ' '); do
-    modisco motifs \
-        -i ${grads_dir}/modisco_preprocessed_tissue_${i}.h5 \
-        -o modiscolite_${grads_dir}/modiscolite_tissue_${i}.h5 \
-        -w 6000 -n 40000 -t 24 -g 8 -z 18 -f 8 -v
+IFS=',' read -ra INDICES <<< "$TISSUE_INDICES"
+for tissue in "${INDICES[@]}"; do
+    modisco meme -i modiscolite_${window_grads_dir}_results/modiscolite_tissue_${tissue}.h5 \
+                 -t PFM \
+                 -o modiscolite_${window_grads_dir}_results/tissue_${tissue}_motifs.meme
+    trim_meme_ic.py modiscolite_${window_grads_dir}_results/tissue_${tissue}_motifs.meme \
+        modiscolite_${window_grads_dir}_results/tissue_${tissue}_motifs_ic_trimed.meme \
+        --ic-thresh 0.1
 done
+
+parallel -j 5 now,fail=1 '
+    tomtom \
+    -oc modiscolite_${window_grads_dir}_results/tomtom_tissue_{} \
+    -evalue \
+    modiscolite_${window_grads_dir}_results/tissue_{}_motifs_ic_trimed.meme \
+    JASPAR2024_CORE_plants_non-redundant_pfms_meme.txt
+' ::: ${TISSUE_INDICES//,/ }
+
+motif_analysis.py -t $TISSUE_INDICES --data_dir modiscolite_${window_grads_dir}_results \
+    --grads_dir $grads_dir --output_dir motif_anaylsis_${window_grads_dir}_results \
+    --window_size $WINDOW
+
+motif_plot.py --h5_file motif_anaylsis_${window_grads_dir}_results/motif_clusters.h5 \
+    --output_dir motif_plots_${window_grads_dir} --tissue_dict "23tissues_dict.json" \
+    --n_process 32 --min_limit -0.015 --max_limit 0.015 \
+    --tissue_colors "#C10606,#C2560F,#196E9B,#508A65,#2A386F" --image_format pdf
 
 # tfmodisco do not support paralleling, here we submit tasks to HPC server.
 #sbatch tfmodisco.slurm tfm_$grads_dir
@@ -62,7 +87,6 @@ done
 # #         JASPAR2024_CORE_plants_non-redundant_pfms_meme.txt  
 # #     '
 
-motif_analysis.py
 ```
 ## Old
 ```sh

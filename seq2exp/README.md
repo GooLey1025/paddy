@@ -47,16 +47,16 @@ se_data_transfer.py all_34samples_trainset.ATG_UD16K.seq2exp --valid_chrom Chr1 
 # or select samples
 se_data_transfer.py all_34samples_trainset.ATG_UD16K.seq2exp --valid_chrom Chr1 --test_chrom Chr2 -o 6P_new_ATG_UpDown16K_transfer_data_out -p 16 --filter_ids 6P.txt
 ```
-Convert json to yaml, and edit transfer.yaml.
+```sh
+json_to_yaml.py 23ave.params_micro_106targets.json -o 23ave.params_micro_106targets_transfer.yaml
+# then manually add `transfer and head params` in transfer.yaml
+```
+After converting json to yaml, you could edit transfer.yaml.
 - Assign `transfer mode` with `linear` to freeze trunk weights, using intermediate embeddings.
 - Assign `transfer mode` with `full` to make all weights trainable, finetuning the model.
 - Assign `transfer mode` with `adapter` to finetune in specific ways.
 
 
-```sh
-json_to_yaml.py 23ave.params_micro_106targets.json -o 23ave.params_micro_106targets_transfer.yaml
-# then manually add `transfer and head params` in transfer.yaml
-```
 
 #### Clarification of `34Prp2_23tracks_34P`
 
@@ -74,13 +74,30 @@ mkdir -p tf_exps
 prefix=34Prp2_23tracks_34P
 seed=100 # 200 300 400
 nohup paddy_transfer.py --seed $seed -o tf_exps/${seed}_${prefix}_train_transfer_out -l tf_exps/${seed}_${prefix}_log_transfer_out --restore SC_models/34P_Borzoi_Seq2RNAseqTracks_rp2_model_best.h5 --trunk transfer_CE_PaddyHead.yaml new_ATG_UpDown16K_transfer_data_out > tf_exps/${seed}_${prefix}.train.log &
+
+prefix=P8Exp0100_129tracks_34P
+seed=100
+nohup paddy_transfer.py --seed $seed -o tf_exps/${seed}_${prefix}_train_transfer_out -l tf_exps/${seed}_${prefix}_log_transfer_out --restore 129_pretrain_model_ablations/exp0_100/model_best.h5 --trunk 129_pretrain_model_ablations/exp0_100/exp0_100.yaml new_ATG_UpDown16K_transfer_data_out > tf_exps/${seed}_${prefix}.train.log &
+
+prefix=P8Exp0100_129tracks_34Pft
+seed=100
+nohup paddy_transfer.py --seed $seed -o tf_exps/${seed}_${prefix}_train_transfer_out -l tf_exps/${seed}_${prefix}_log_transfer_out --restore 129_pretrain_model_ablations/exp0_100/model_best.h5 --trunk 129_pretrain_model_ablations/exp0_100/exp0_100_finetune.yaml new_ATG_UpDown16K_transfer_data_out > tf_exps/${seed}_${prefix}.train.log &
+
 ```
 (Optional, not checked) If want to search hyperparameters of best model, do grid search experiments. 
 ```sh
 # GRIDS=grid_search_20250704_night
 # train_grid.py  -s "paddy_transfer.py" -a " " --output_dir experiments/$GRIDS --seeds 1 100 200 300 400 -p 1
 ```
+Train model across different seeds.
+```sh
+mkdir -p MF_exps
+prefix=34Prp1_23tracks_34P
+seed=100
+nohup paddy_train.py --pretrained SC_models/34P_Borzoi_Seq2RNAseqTracks_rp1_model_best.h5 --trunk -s ${seed} MultiFuse.yaml new_ATG_UpDown16K_transfer_data_out -o MF_exps/${seed}_${prefix}_train_transfer_out -l MF_exps/${seed}_${prefix}_log_transfer_out > MF_exps/${seed}_${prefix}.train.log &
 
+nohup paddy_train.py --pretrained pretrain_model_ablations/exp0_100/model_best.h5 --trunk -s ${seed} 106tracks_MultiFuse.yaml new_ATG_UpDown16K_transfer_data_out -o MF_exps/${seed}_${prefix}_train_transfer_out -l MF_exps/${seed}_${prefix}_log_transfer_out > MF_exps/${seed}_${prefix}.train.log &
+```
 ### Inference
 ```sh
 # Just predict based on one best model
@@ -88,7 +105,7 @@ se_predict.py -m train_transfer_out/model_best.h5 -ref NumChr.Rice_MSUv7.fa -b s
 
 # If want to compare with different seeds
 prefix=34Prp2_23tracks_6P
-mkdir -p ${prefix}_TrunkFrozen_PaddyHead_best_model_dir
+mkdir -p best_model_dirs/${prefix}_TrunkFrozen_PaddyHead_best_model_dir
 # move best_models whose name are seed100_*.h5 to the model_dir
 se_predict.py -m ${prefix}_TrunkFrozen_PaddyHead_best_model_dir -ref NumChr.Rice_MSUv7.fa -b sequences_to_predict.bed --params_file transfer_CE_PaddyHead.yaml -o ${prefix}_preds --plot
 
@@ -101,12 +118,22 @@ se_eval.py transfer_CE_PaddyHead.yaml ${prefix}_TrunkFrozen_PaddyHead_best_model
 
 # run pipe multiple times
 prefix=34Prp2_23tracks_34P
+seed=100
+
 nohup se_eval_pipe.sh transfer_CE_PaddyHead.yaml \
-    ${prefix}_TrunkFrozen_PaddyHead_best_model_dir/seed100_model_best.h5 \
+    best_model_dirs/${prefix}_TrunkFrozen_PaddyHead_best_model_dir/seed${seed}_model_best.h5 \
+    new_ATG_UpDown16K_transfer_data_out \
+    new_ATG_UpDown16K_transfer_data_out/unique_identifiers.txt \
+    se_eval_exps_${seed}_${prefix} > se_eval_exps_${seed}_${prefix}.log &
+
+seed=100
+prefix=P8Exp0100_129tracks_34P$seed
+nohup se_eval_pipe.sh 129_pretrain_model_ablations/exp0_100/exp0_100.yaml \
+    best_model_dirs/${prefix}_TrunkFrozen_PaddyHead_best_model_dir/seed${seed}_model_best.h5 \
     new_ATG_UpDown16K_transfer_data_out \
     new_ATG_UpDown16K_transfer_data_out/unique_identifiers.txt \
     se_eval_exps_${prefix} > se_eval_exps_${prefix}.log &
-
+format_metrics_tsv.py 
 # combine all exps
 > all_metrics_combined.tsv
 head -n 1 $(find ./se_eval_exps_* -name "all_metrics.tsv" | head -n 1) > all_metrics_combined.tsv
