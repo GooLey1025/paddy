@@ -28,7 +28,8 @@ dependencies = [
     "openpyxl",
     "umap-learn",
     "seaborn",
-    "intervaltree"
+    "intervaltree",
+	"pybedtools"
 ]
 
 [project.optional-dependencies]
