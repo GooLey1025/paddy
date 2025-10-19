@@ -105,7 +105,7 @@ def main():
     seq_len = params_model["seq_length"]
     model_type = params_model.get("model_type", "2d_to_1d")
     if model_type != "2d_to_1d":
-        raise ValueError(f"Model type {model_type} not supported for this script.")
+        raise ValueError(f"Model type {model_type} not supported for this script. Have not implemented gradients for 2d_to_2d models yet.")
 
     # Load model
     seqnn_model = seqnn.SeqNN(params_model)
