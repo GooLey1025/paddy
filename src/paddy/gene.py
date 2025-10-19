@@ -76,10 +76,11 @@ class Gene:
         if not hasattr(self, 'cds_intervals'):
             self.cds_intervals = IntervalTree()
         self.cds_intervals.merge_overlaps()
+        # notice it is right open interval
         return sorted(self.cds_intervals)
     
     def cds_start(self):
-        """Get the start position of the first CDS (ATG position for + strand).
+        """Get the start position of the first CDS (ATG position for + strand) (0-indexed position).
         Falls back to gene start if no CDS information available."""
         cds_list = self.get_cds()
         if not cds_list:
@@ -89,14 +90,13 @@ class Gene:
         return min(cds.begin for cds in cds_list)
     
     def cds_end(self):
-        """Get the end position of the last CDS (ATG position for - strand).
-        Falls back to gene end if no CDS information available."""
+        """Get the end position of the last CDS (ATG position for - strand) (0-indexed position)."""
         cds_list = self.get_cds()
         if not cds_list:
-            # If no CDS, fall back to gene end (last exon end)
             _, gene_end = self.span()
             return gene_end
-        return max(cds.end for cds in cds_list)
+        # Because it is right open interval, So need to minus 1 to get the last CDS end position (which is still 0-indexed position)
+        return max(cds.end for cds in cds_list) - 1
 
     def output_slice_old(self, seq_start, seq_len, model_stride, span=False):
         gene_slice = []

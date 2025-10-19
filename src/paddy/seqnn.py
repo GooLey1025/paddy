@@ -948,6 +948,549 @@ class SeqNN:
 
         return grads
 
+    def integrated_gradients(
+        self,
+        seq_1hot,
+        baseline=None,
+        num_steps=50,
+        head_i=None,
+        target_slice=None,
+        pos_slice=None,
+        pos_mask=None,
+        pos_slice_denom=None,
+        pos_mask_denom=None,
+        chunk_size=None,
+        batch_size=1,
+        track_scale=1.0,
+        track_transform=1.0,
+        clip_soft=None,
+        pseudo_count=0.0,
+        untransform_old=False,
+        no_untransform=False,
+        use_mean=False,
+        use_ratio=False,
+        use_logodds=False,
+        subtract_avg=True,
+        dtype="float16",
+        tissue_slab=1,
+        use_mean_target=False,
+    ):
+        """Compute integrated gradients for sequences.
+        
+        Integrated Gradients attribution method from Sundararajan et al. (2017).
+        Computes gradients along the path from baseline to input and integrates them.
+        
+        Note: Integrated Gradients inherently captures input information through the 
+        integration path (baseline to input), so no separate input_gate is needed.
+        
+        Args:
+            seq_1hot: Input sequences
+            baseline: Baseline sequences. If None, uses zero baseline.
+            num_steps: Number of interpolation steps for Riemann approximation
+            tissue_slab: Number of tissues to process at once (for 2d_to_1d models, default=1)
+            subtract_avg: Whether to subtract mean across nucleotides (default=True)
+            use_mean_target: If True, compute gradient w.r.t. mean of all targets/tissues.
+                           This gives global importance scores independent of specific tissues.
+                           Only applicable for 2d_to_1d models. (default=False)
+            (other args same as gradients method)
+        
+        Returns:
+            Integrated gradients. Shape depends on use_mean_target:
+            - If use_mean_target=False: [batch, seq_len, 4, num_tissues]
+            - If use_mean_target=True: [batch, seq_len, 4, 1]
+        """
+        # start time
+        t0 = time.time()
+
+        # choose model
+        if self.ensemble is not None:
+            model = self.ensemble
+        elif head_i is not None:
+            model = self.models[head_i]
+        else:
+            model = self.model
+
+        # verify tensor shape(s)
+        seq_1hot = seq_1hot.astype("float32")
+        target_slice = np.array(target_slice).astype("int32")
+        pos_slice = np.array(pos_slice).astype("int32")
+
+        # convert constants to tf tensors
+        track_scale = tf.constant(track_scale, dtype=tf.float32)
+        track_transform = tf.constant(track_transform, dtype=tf.float32)
+        if clip_soft is not None:
+            clip_soft = tf.constant(clip_soft, dtype=tf.float32)
+        pseudo_count = tf.constant(pseudo_count, dtype=tf.float32)
+
+        if pos_mask is not None:
+            pos_mask = np.array(pos_mask).astype("float32")
+
+        if use_ratio and pos_slice_denom is not None:
+            pos_slice_denom = np.array(pos_slice_denom).astype("int32")
+
+            if pos_mask_denom is not None:
+                pos_mask_denom = np.array(pos_mask_denom).astype("float32")
+
+        if len(seq_1hot.shape) < 3:
+            seq_1hot = seq_1hot[None, ...]
+
+        if len(target_slice.shape) < 2:
+            target_slice = target_slice[None, ...]
+
+        if len(pos_slice.shape) < 2:
+            pos_slice = pos_slice[None, ...]
+
+        if pos_mask is not None and len(pos_mask.shape) < 2:
+            pos_mask = pos_mask[None, ...]
+
+        if use_ratio and pos_slice_denom is not None and len(pos_slice_denom.shape) < 2:
+            pos_slice_denom = pos_slice_denom[None, ...]
+
+            if pos_mask_denom is not None and len(pos_mask_denom.shape) < 2:
+                pos_mask_denom = pos_mask_denom[None, ...]
+
+        # create baseline if not provided (all zeros)
+        if baseline is None:
+            baseline = np.zeros_like(seq_1hot, dtype="float32")
+        else:
+            baseline = baseline.astype("float32")
+            if len(baseline.shape) < 3:
+                baseline = baseline[None, ...]
+
+        # chunk parameters
+        num_chunks = 1
+        if chunk_size is None:
+            chunk_size = seq_1hot.shape[0]
+        else:
+            num_chunks = int(np.ceil(seq_1hot.shape[0] / chunk_size))
+
+        # loop over chunks
+        ig_chunks = []
+        for ci in range(num_chunks):
+            # collect chunk
+            seq_1hot_chunk = seq_1hot[ci * chunk_size : (ci + 1) * chunk_size, ...]
+            baseline_chunk = baseline[ci * chunk_size : (ci + 1) * chunk_size, ...]
+            target_slice_chunk = target_slice[
+                ci * chunk_size : (ci + 1) * chunk_size, ...
+            ]
+            pos_slice_chunk = pos_slice[ci * chunk_size : (ci + 1) * chunk_size, ...]
+
+            pos_mask_chunk = None
+            if pos_mask is not None:
+                pos_mask_chunk = pos_mask[ci * chunk_size : (ci + 1) * chunk_size, ...]
+
+            pos_slice_denom_chunk = None
+            pos_mask_denom_chunk = None
+            if use_ratio and pos_slice_denom is not None:
+                pos_slice_denom_chunk = pos_slice_denom[
+                    ci * chunk_size : (ci + 1) * chunk_size, ...
+                ]
+
+                if pos_mask_denom is not None:
+                    pos_mask_denom_chunk = pos_mask_denom[
+                        ci * chunk_size : (ci + 1) * chunk_size, ...
+                    ]
+
+            actual_chunk_size = seq_1hot_chunk.shape[0]
+
+            # convert to tf tensors
+            seq_1hot_chunk = tf.convert_to_tensor(seq_1hot_chunk, dtype=tf.float32)
+            baseline_chunk = tf.convert_to_tensor(baseline_chunk, dtype=tf.float32)
+            target_slice_chunk = tf.convert_to_tensor(
+                target_slice_chunk, dtype=tf.int32
+            )
+            pos_slice_chunk = tf.convert_to_tensor(pos_slice_chunk, dtype=tf.int32)
+
+            if pos_mask is not None:
+                pos_mask_chunk = tf.convert_to_tensor(pos_mask_chunk, dtype=tf.float32)
+
+            if use_ratio and pos_slice_denom is not None:
+                pos_slice_denom_chunk = tf.convert_to_tensor(
+                    pos_slice_denom_chunk, dtype=tf.int32
+                )
+
+                if pos_mask_denom is not None:
+                    pos_mask_denom_chunk = tf.convert_to_tensor(
+                        pos_mask_denom_chunk, dtype=tf.float32
+                    )
+
+            # batching parameters
+            num_batches = int(np.ceil(actual_chunk_size / batch_size))
+
+            # loop over batches
+            ig_batches = []
+            for bi in range(num_batches):
+                # collect batch
+                seq_1hot_batch = seq_1hot_chunk[
+                    bi * batch_size : (bi + 1) * batch_size, ...
+                ]
+                baseline_batch = baseline_chunk[
+                    bi * batch_size : (bi + 1) * batch_size, ...
+                ]
+                target_slice_batch = target_slice_chunk[
+                    bi * batch_size : (bi + 1) * batch_size, ...
+                ]
+                pos_slice_batch = pos_slice_chunk[
+                    bi * batch_size : (bi + 1) * batch_size, ...
+                ]
+
+                pos_mask_batch = None
+                if pos_mask is not None:
+                    pos_mask_batch = pos_mask_chunk[
+                        bi * batch_size : (bi + 1) * batch_size, ...
+                    ]
+
+                pos_slice_denom_batch = None
+                pos_mask_denom_batch = None
+                if use_ratio and pos_slice_denom is not None:
+                    pos_slice_denom_batch = pos_slice_denom_chunk[
+                        bi * batch_size : (bi + 1) * batch_size, ...
+                    ]
+
+                    if pos_mask_denom is not None:
+                        pos_mask_denom_batch = pos_mask_denom_chunk[
+                            bi * batch_size : (bi + 1) * batch_size, ...
+                        ]
+
+                ig_batch = (
+                    self.integrated_gradients_func(
+                        model,
+                        seq_1hot_batch,
+                        baseline_batch,
+                        num_steps,
+                        target_slice_batch,
+                        pos_slice_batch,
+                        pos_mask_batch,
+                        pos_slice_denom_batch,
+                        pos_mask_denom_batch,
+                        track_scale,
+                        track_transform,
+                        clip_soft,
+                        pseudo_count,
+                        untransform_old,
+                        no_untransform,
+                        use_mean,
+                        use_ratio,
+                        use_logodds,
+                        subtract_avg,
+                        tissue_slab,
+                        use_mean_target,
+                    )
+                    .numpy()
+                    .astype(dtype)
+                )
+
+                ig_batches.append(ig_batch)
+
+            # concat integrated gradient batches
+            igs = np.concatenate(ig_batches, axis=0)
+
+            ig_chunks.append(igs)
+
+            # collect garbage
+            gc.collect()
+
+        # concat integrated gradient chunks
+        igs = np.concatenate(ig_chunks, axis=0)
+
+        print("Completed integrated gradients computation in %ds" % (time.time() - t0))
+
+        return igs
+    
+    def integrated_gradients_func(
+        self,
+        model,
+        seq_1hot,
+        baseline,
+        num_steps,
+        target_slice,
+        pos_slice,
+        pos_mask=None,
+        pos_slice_denom=None,
+        pos_mask_denom=True,
+        track_scale=1.0,
+        track_transform=1.0,
+        clip_soft=None,
+        pseudo_count=0.0,
+        untransform_old=False,
+        no_untransform=False,
+        use_mean=False,
+        use_ratio=False,
+        use_logodds=False,
+        subtract_avg=True,
+        tissue_slab=None,
+        use_mean_target=False,
+    ):
+        """Compute integrated gradients using Riemann approximation.
+        
+        IG_i(x) ≈ (x_i - x'_i) * (1/m) * Σ_{k=1}^{m} ∂F(x' + k/m * (x - x')) / ∂x_i
+        
+        Note: No input_gate needed - IG inherently captures input through path integration.
+        """
+        # compute path difference
+        path_diff = seq_1hot - baseline
+        
+        # Check model type
+        model_type = getattr(self, 'model_type', None)
+        
+        if model_type == '2d_to_1d':
+            # Memory-efficient version for 2d_to_1d models
+            return self._integrated_gradients_2d_to_1d_chunked(
+                model, seq_1hot, baseline, path_diff, num_steps,
+                target_slice, pos_slice, pos_mask, pos_slice_denom, pos_mask_denom,
+                track_scale, track_transform, clip_soft, pseudo_count,
+                untransform_old, no_untransform, use_mean, use_ratio, use_logodds,
+                subtract_avg, tissue_slab, use_mean_target
+            )
+        else:
+            # Original 2d_to_2d behavior (already memory efficient)
+            return self._integrated_gradients_2d_to_2d(
+                model, seq_1hot, baseline, path_diff, num_steps,
+                target_slice, pos_slice, pos_mask, pos_slice_denom, pos_mask_denom,
+                track_scale, track_transform, clip_soft, pseudo_count,
+                untransform_old, no_untransform, use_mean, use_ratio, use_logodds,
+                subtract_avg
+            )
+    
+    def _integrated_gradients_2d_to_1d_chunked(
+        self, model, seq_1hot, baseline, path_diff, num_steps,
+        target_slice, pos_slice, pos_mask, pos_slice_denom, pos_mask_denom,
+        track_scale, track_transform, clip_soft, pseudo_count,
+        untransform_old, no_untransform, use_mean, use_ratio, use_logodds,
+        subtract_avg, tissue_slab, use_mean_target
+    ):
+        """Memory-efficient integrated gradients for 2d_to_1d models.
+        
+        Strategy: 
+        1. For each tissue, compute gradient separately (avoid batch_jacobian)
+        2. Only keep current tissue chunk's activations in memory
+        3. Sample batching is already handled by outer integrated_gradients method
+        
+        Key insight: Each tissue gradient is computed independently by taking
+        gradient of scalar sum of that tissue's scores across samples in the batch.
+        The gradient automatically distributes back to each sample's input positions.
+        
+        If use_mean_target=True: Compute gradient w.r.t. mean of all tissues, giving
+        global importance scores independent of specific tissues.
+        """
+        # Get dimensions
+        b_val = seq_1hot.shape[0]
+        l_val = seq_1hot.shape[1]
+        d_val = seq_1hot.shape[2]
+        num_tissues = model.output_shape[-1]
+        
+        # Determine output shape based on mode
+        if use_mean_target:
+            # Global importance mode: single output channel
+            num_output_channels = 1
+        else:
+            # Per-tissue mode
+            num_output_channels = num_tissues
+        
+        # Determine chunking parameters
+        if tissue_slab is None:
+            tissue_slab = 1  # Process one tissue at a time for maximum memory savings
+        
+        # Initialize result - use numpy for eager execution compatibility
+        integrated_grads_np = np.zeros([b_val, l_val, d_val, num_output_channels], dtype=seq_1hot.numpy().dtype)
+        
+        if use_mean_target:
+            # Global importance mode: compute gradient w.r.t. mean of all tissues
+            global_grads_np = np.zeros([b_val, l_val, d_val], dtype=seq_1hot.numpy().dtype)
+            
+            # Loop over integration steps
+            for step in range(1, num_steps + 1):
+                alpha = tf.cast(step / num_steps, dtype=tf.float32)
+                interpolated_input = baseline + alpha * path_diff
+                interpolated_input = tf.convert_to_tensor(interpolated_input, dtype=tf.float32)
+                
+                # Use a tape to compute gradient w.r.t. mean of all tissues
+                with tf.GradientTape() as tape:
+                    tape.watch(interpolated_input)
+                    
+                    # Forward pass
+                    preds = model(interpolated_input, training=False)
+                    preds = preds / track_scale
+                    
+                    # Untransform
+                    if not no_untransform:
+                        score_all = tf.maximum(tf.exp(preds) - 1.0, 0.0)
+                    else:
+                        score_all = tf.maximum(preds, 0.0)
+                    
+                    # Take mean across all tissues: shape [batch]
+                    score_mean = tf.reduce_mean(score_all, axis=-1)
+                    
+                    # Reduce to scalar (sum over samples in batch)
+                    score_scalar = tf.reduce_sum(score_mean)
+                
+                # Compute gradient w.r.t. input
+                grad = tape.gradient(score_scalar, interpolated_input)
+                
+                # Accumulate gradient - shape [batch, L, D]
+                if grad is not None:
+                    global_grads_np += grad.numpy()
+                else:
+                    print(f"Warning: gradient is None at step {step}")
+            
+            # Place into output with extra dimension for consistency
+            integrated_grads_np[:, :, :, 0] = global_grads_np
+            
+        else:
+            # Per-tissue mode: compute gradient for each tissue separately
+            num_tissue_chunks = int(np.ceil(num_tissues / tissue_slab))
+            for t_chunk_idx in range(num_tissue_chunks):
+                t_start = t_chunk_idx * tissue_slab
+                t_end = min(t_start + tissue_slab, num_tissues)
+                
+                # Accumulate gradients over interpolation steps for this tissue chunk
+                tissue_chunk_grads_np = np.zeros([b_val, l_val, d_val, t_end - t_start], 
+                                                  dtype=seq_1hot.numpy().dtype)
+                
+                # Loop over integration steps
+                for step in range(1, num_steps + 1):
+                    alpha = tf.cast(step / num_steps, dtype=tf.float32)
+                    interpolated_input = baseline + alpha * path_diff
+                    interpolated_input = tf.convert_to_tensor(interpolated_input, dtype=tf.float32)
+                    
+                    # Compute gradient for each tissue in the chunk separately
+                    for local_t_idx in range(t_end - t_start):
+                        t_idx = t_start + local_t_idx
+                        
+                        # Use a separate tape for each tissue to minimize memory
+                        with tf.GradientTape() as tape:
+                            tape.watch(interpolated_input)
+                            
+                            # Forward pass (will be repeated for each tissue, but saves memory)
+                            preds = model(interpolated_input, training=False)
+                            preds = preds / track_scale
+                            
+                            # Untransform
+                            if not no_untransform:
+                                score_all = tf.maximum(tf.exp(preds) - 1.0, 0.0)
+                            else:
+                                score_all = tf.maximum(preds, 0.0)
+                            
+                            # Extract score for this tissue: shape [batch]
+                            score_tissue = score_all[:, t_idx]
+                            
+                            # Reduce to scalar (sum over samples in batch)
+                            score_scalar = tf.reduce_sum(score_tissue)
+                        
+                        # Compute gradient w.r.t. input
+                        grad = tape.gradient(score_scalar, interpolated_input)
+                        
+                        # Accumulate gradient - shape [batch, L, D]
+                        if grad is not None:
+                            tissue_chunk_grads_np[:, :, :, local_t_idx] += grad.numpy()
+                        else:
+                            print(f"Warning: gradient is None for tissue {t_idx} at step {step}")
+                
+                # Place tissue chunk gradients into full integrated_grads
+                integrated_grads_np[:, :, :, t_start:t_end] = tissue_chunk_grads_np
+        
+        # Average over steps
+        integrated_grads_np = integrated_grads_np / num_steps
+        
+        # Apply subtract_avg if needed (per tissue, over nucleotides axis=-2)
+        if subtract_avg:
+            integrated_grads_np = integrated_grads_np - np.mean(integrated_grads_np, axis=-2, keepdims=True)
+        
+        # Multiply by path difference to complete IG formula
+        # IG_i(x) = (x_i - x'_i) * average_gradients
+        path_diff_expanded = np.expand_dims(path_diff.numpy(), axis=-1)
+        integrated_grads_np = integrated_grads_np * path_diff_expanded
+        
+        return tf.constant(integrated_grads_np, dtype=seq_1hot.dtype)
+    
+    def _integrated_gradients_2d_to_2d(
+        self, model, seq_1hot, baseline, path_diff, num_steps,
+        target_slice, pos_slice, pos_mask, pos_slice_denom, pos_mask_denom,
+        track_scale, track_transform, clip_soft, pseudo_count,
+        untransform_old, no_untransform, use_mean, use_ratio, use_logodds,
+        subtract_avg
+    ):
+        """Original integrated gradients for 2d_to_2d models."""
+        integrated_grads = tf.zeros_like(seq_1hot)
+        
+        def compute_score_ratios(interpolated_input):
+            preds = model(interpolated_input, training=False)
+            preds = preds / track_scale
+            preds = tf.gather(preds, target_slice, axis=-1, batch_dims=1)
+
+            if not no_untransform:
+                if untransform_old:
+                    preds = preds / track_scale
+                    if clip_soft is not None:
+                        preds = tf.where(preds > clip_soft, (preds - clip_soft) ** 2 + clip_soft, preds)
+                    preds = preds ** (1.0 / track_transform)
+                else:
+                    if clip_soft is not None:
+                        preds = tf.where(preds > clip_soft, (preds - clip_soft + 1) ** 2 + clip_soft - 1, preds)
+                    preds = -1 + (preds + 1) ** (1.0 / track_transform)
+                    preds = preds / track_scale
+
+            preds = tf.reduce_mean(preds, axis=-1)
+            preds_slice = tf.gather(preds, pos_slice, axis=-1, batch_dims=1)
+            if pos_mask is not None:
+                preds_slice = preds_slice * pos_mask
+
+            if use_ratio and pos_slice_denom is not None:
+                preds_slice_denom = tf.gather(preds, pos_slice_denom, axis=-1, batch_dims=1)
+                if pos_mask_denom is not None:
+                    preds_slice_denom = preds_slice_denom * pos_mask_denom
+
+            if not use_mean:
+                preds_agg = tf.reduce_sum(preds_slice, axis=-1)
+                if use_ratio and pos_slice_denom is not None:
+                    preds_agg_denom = tf.reduce_sum(preds_slice_denom, axis=-1)
+            else:
+                if pos_mask is not None:
+                    preds_agg = tf.reduce_sum(preds_slice, axis=-1) / tf.reduce_sum(pos_mask, axis=-1)
+                else:
+                    preds_agg = tf.reduce_mean(preds_slice, axis=-1)
+                if use_ratio and pos_slice_denom is not None:
+                    if pos_mask_denom is not None:
+                        preds_agg_denom = tf.reduce_sum(preds_slice_denom, axis=-1) / tf.reduce_sum(pos_mask_denom, axis=-1)
+                    else:
+                        preds_agg_denom = tf.reduce_mean(preds_slice_denom, axis=-1)
+
+            if no_untransform:
+                score_ratios = preds_agg
+            elif not use_ratio:
+                score_ratios = tf.math.log(preds_agg + pseudo_count + 1e-6)
+            else:
+                if not use_logodds:
+                    score_ratios = tf.math.log((preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count) + 1e-6)
+                else:
+                    score_ratios = tf.math.log(
+                        ((preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count))
+                        / (1.0 - ((preds_agg + pseudo_count) / (preds_agg_denom + pseudo_count)))
+                        + 1e-6
+                    )
+            return score_ratios
+        
+        for step in tf.range(1, num_steps + 1):
+            alpha = tf.cast(step, tf.float32) / tf.cast(num_steps, tf.float32)
+            interpolated_input = baseline + alpha * path_diff
+            
+            with tf.GradientTape() as tape:
+                tape.watch(interpolated_input)
+                score_ratios = compute_score_ratios(interpolated_input)
+            
+            grads = tape.gradient(score_ratios, interpolated_input)
+            
+            if subtract_avg:
+                grads = grads - tf.reduce_mean(grads, axis=-1, keepdims=True)
+            
+            integrated_grads = integrated_grads + grads
+        
+        # Complete IG formula: IG = (x - x') * average_gradients
+        avg_grads = integrated_grads / tf.cast(num_steps, tf.float32)
+        integrated_gradients = avg_grads * path_diff
+        
+        return integrated_gradients
+
     @tf.function
     def gradients_func(
         self,
@@ -992,7 +1535,7 @@ class SeqNN:
                 if not no_untransform:
                     score_ratios = tf.maximum(tf.exp(preds) - 1.0, 0.0)
                 else:
-                    score_ratios = preds
+                    score_ratios = tf.maximum(preds, 0.0)
                     
             else:  # 2D output: [batch, length, targets] - for 2d_to_2d models (original borzoi behavior)
                 preds = tf.gather(preds, target_slice, axis=-1, batch_dims=1)

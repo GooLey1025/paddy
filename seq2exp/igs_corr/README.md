@@ -38,9 +38,6 @@ yaml=../tf_exps/${seed}_${prefix}_train_transfer_out/params.yaml
 
 i=1 # 1...12
 csv=$PREFIX/chr${i}.csv
-CUDA_VISIBLE_DEVICES=1 \
-    nohup paddy_igs_region.py -o $PREFIX/${prefix}_${seed}.chr${i}.igs_region.h5 --num_steps 50 \
-        --model_path $model_path --regions_csv $csv \
-        $yaml NumChr.Rice_MSUv7.fa Rice_MSUv7.gff3 > $PREFIX/chr${i}_igs_region.log 2>&1 &
+CUDA_VISIBLE_DEVICES=1 nohup paddy_igs_region.py -o $PREFIX/${prefix}_${seed}.chr${i}.igs_region.h5 --num_steps 50 --model_path $model_path --regions_csv $csv $yaml NumChr.Rice_MSUv7.fa Rice_MSUv7.gff3 > $PREFIX/chr${i}_igs_region.log 2>&1 &
     
 ```
