@@ -95,7 +95,7 @@ class Gene:
         if not cds_list:
             _, gene_end = self.span()
             return gene_end
-        # Because it is right open interval, So need to minus 1 to get the last CDS end position (which is still 0-indexed position)
+        # Because IntervalTree is right open interval, So need to minus 1 to get the last CDS end position (which is still 0-indexed position)
         return max(cds.end for cds in cds_list) - 1
 
     def output_slice_old(self, seq_start, seq_len, model_stride, span=False):
