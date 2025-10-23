@@ -3,11 +3,7 @@
 import argparse
 import os
 import sys
-import paddy.utils as utils
 import random
-
-# Set GPU device(s) before importing TensorFlow
-gpu_ids = utils.set_gpu_device()
 
 import shutil
 import re
@@ -18,6 +14,20 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
 import tensorflow.config as tf_config
+
+# Set GPU device(s) after importing TensorFlow
+import paddy.utils as utils
+gpu_ids = utils.set_gpu_device()
+
+# Configure GPU memory growth to avoid memory allocation issues
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"Configured memory growth for {len(gpus)} GPU(s)")
+    except RuntimeError as e:
+        print(f"GPU memory growth configuration error: {e}")
 
 from paddy import dataset
 from paddy import seqnn
@@ -221,9 +231,13 @@ def main():
             % transfer.param_count(seqnn_model.model.layers[-2])
         )
 
-        # for model in seqnn_model.models:
-        #     dummy = tf.zeros([1, seqnn_model.seq_length, seqnn_model.seq_depth])  
-        #     model(dummy)
+        # Initialize model with dummy input to ensure proper GPU memory allocation
+        print("Initializing models with dummy input...")
+        for i, model in enumerate(seqnn_model.models):
+            print(f"Initializing model {i+1}/{len(seqnn_model.models)}")
+            dummy = tf.zeros([1, seqnn_model.seq_length, seqnn_model.seq_depth])  
+            _ = model(dummy)
+        print("Model initialization completed.")
 
         ####################
         # transfer options #
@@ -291,9 +305,14 @@ def main():
         #################
         # final summary #
         #################
+        print("Transfer learning setup completed. Model summary:")
         seqnn_model.model.summary()
+        print(f"Model trainable parameters: {seqnn_model.model.count_params()}")
+        print(f"GPU memory info: {tf.config.experimental.get_memory_info('GPU:0') if tf.config.list_physical_devices('GPU') else 'No GPU available'}")
 
+        print("Initializing trainer...")
         if args.mixed_precision:
+            print("Using mixed precision training")
             # add additional activation to cast float16 output to float32
             seqnn_model.append_activation()
             # run with loss scaling
@@ -306,12 +325,16 @@ def main():
                 loss_scale=True,
             )
         else:
+            print("Using standard precision training")
             seqnn_trainer = trainer.Trainer(
                 params_train, train_data, eval_data, args.out_dir, args.log_dir
             )
+        print("Trainer initialized successfully.")
 
         # compile model
+        print("Compiling model...")
         seqnn_trainer.compile(seqnn_model)
+        print("Model compiled successfully.")
 
         if args.skip_train:
             exit(0)

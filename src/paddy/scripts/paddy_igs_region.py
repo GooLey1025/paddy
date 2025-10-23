@@ -340,7 +340,7 @@ def make_seq_1hot_co_interval(genome_open, chrm, start, end, seq_len, strand, at
 
     if seq_dna[16384:16387].upper() != "ATG":
         print(f"Warning: ATG not found at position chr:start-end(1-based) (strand: {strand}): {chrm}:{start+1}-{end+1}, instead {seq_dna[16384:16387]}")
-    atg_not_found_count += 1
+        atg_not_found_count += 1
         
 
     return seq_1hot, atg_not_found_count
@@ -561,6 +561,11 @@ def main():
     scores_h5.create_dataset("region_end", data=np.array([r['region_end'] for r in valid_regions], dtype="int32"))
     scores_h5.create_dataset("region_length", data=np.array([r['region_rel_end'] - r['region_rel_start'] for r in valid_regions], dtype="int32"))
     scores_h5.create_dataset("gene_id", data=np.array([r['gene_id'] for r in valid_regions], dtype="S"))
+    scores_h5.create_dataset("gene_strand", data=np.array([r['gene_strand'] for r in valid_regions], dtype="S"))
+    scores_h5.create_dataset("region_rel_start", data=np.array([r['region_rel_start'] for r in valid_regions], dtype="int32"))
+    scores_h5.create_dataset("region_rel_end", data=np.array([r['region_rel_end'] for r in valid_regions], dtype="int32"))
+    scores_h5.create_dataset("seq_start", data=np.array([r['seq_start'] for r in valid_regions], dtype="int32"))
+    scores_h5.create_dataset("seq_end", data=np.array([r['seq_end'] for r in valid_regions], dtype="int32"))
     
     # Add fold_enrichment only if it exists in the CSV
     if has_fold_enrichment:

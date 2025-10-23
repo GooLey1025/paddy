@@ -75,13 +75,6 @@ def parse_args():
         type="int",
         help="Batch size for predictions [Default: %default]",
     )
-    parser.add_option(
-        "--regions_tsv",
-        dest="regions_tsv",
-        default=None,
-        type="str",
-        help="Optional TSV file with header and regions to mask (columns: chr, start, end in 1-based coordinates). If not provided, all positions will be processed [Default: %default]",
-    )
     
     return parser.parse_args()
 
@@ -170,70 +163,6 @@ def predict_ensemble_batch(seqnn_model, seqs_1hot, shifts, rc):
     return preds_batch
 
 
-def load_regions_filter(regions_tsv, gene_windows):
-    """Load regions from TSV and create position masks for each gene.
-    
-    Args:
-        regions_tsv: Path to TSV file with header (chr, start, end) in 1-based coordinates
-        gene_windows: Dict mapping gene_id to gene metadata dict
-        
-    Returns:
-        Dict mapping gene_id to boolean mask (seq_len,)
-    """
-    print(f"\nLoading region filters from {regions_tsv}")
-    
-    # Load regions from TSV (with header)
-    regions_df = pd.read_csv(regions_tsv, sep='\t')
-    print(f"Loaded {len(regions_df)} regions")
-    
-    # Group regions by chromosome for efficient lookup
-    regions_by_chr = {}
-    for _, row in regions_df.iterrows():
-        chrm = str(row['chr'])
-        start = int(row['start'])  # 1-based
-        end = int(row['end'])  # 1-based inclusive
-        if chrm not in regions_by_chr:
-            regions_by_chr[chrm] = []
-        regions_by_chr[chrm].append((start, end))
-    
-    # Create masks for each gene
-    gene_masks = {}
-    for gene_id, gene_info in gene_windows.items():
-        seq_len = gene_info['seq_end'] - gene_info['seq_start']
-        mask = np.zeros(seq_len, dtype=bool)
-        
-        gene_chr = gene_info['gene_chr']
-        seq_start = gene_info['seq_start']  # 1-based
-        gene_strand = gene_info['gene_strand']
-        
-        if gene_chr in regions_by_chr:
-            for region_start, region_end in regions_by_chr[gene_chr]:
-                # Find overlap between region and gene's sequence window
-                # Convert to relative positions in the sequence
-                rel_start = max(0, region_start - seq_start)
-                rel_end = min(seq_len, region_end - seq_start + 1)
-                
-                if rel_start < rel_end:
-                    # For minus strand genes, the sequence is reverse complemented
-                    # So we need to flip the positions
-                    if gene_strand == "-":
-                        # Flip positions for RC sequences
-                        rc_start = seq_len - rel_end
-                        rc_end = seq_len - rel_start
-                        mask[rc_start:rc_end] = True
-                    else:
-                        mask[rel_start:rel_end] = True
-        
-        gene_masks[gene_id] = mask
-        if mask.sum() > 0:
-            print(f"  Gene {gene_id}: {mask.sum()} positions in filter")
-    
-    total_filtered = sum(m.sum() for m in gene_masks.values())
-    print(f"Total positions to process: {total_filtered}")
-    
-    return gene_masks
-
-
 def main():
     options, args = parse_args()
     
@@ -262,8 +191,6 @@ def main():
     print(f"Genes GFF:      {genes_gff}")
     print(f"Model:          {options.model_path}")
     print(f"Output:         {options.out_file}")
-    if options.regions_tsv:
-        print(f"Regions filter: {options.regions_tsv}")
     print("="*70)
     
     # Read model parameters
@@ -390,12 +317,6 @@ def main():
         skipped_df.to_csv(skipped_path, index=False)
         print(f"Saved skipped genes to: {skipped_path}")
     
-    # Load region filters if provided
-    gene_masks = None
-    if options.regions_tsv:
-        gene_windows = {g['gene_id']: g for g in valid_genes}
-        gene_masks = load_regions_filter(options.regions_tsv, gene_windows)
-    
     # Initialize output HDF5
     print(f"\nInitializing output file: {options.out_file}")
     if os.path.isfile(options.out_file):
@@ -423,13 +344,6 @@ def main():
     scores_h5.create_dataset("cds_start", data=np.array([g['cds_start'] for g in valid_genes], dtype="int32"))
     scores_h5.create_dataset("cds_end", data=np.array([g['cds_end'] for g in valid_genes], dtype="int32"))
     
-    # Save position masks if region filtering is used
-    if gene_masks is not None:
-        mask_array = np.zeros((num_valid, seq_len), dtype=bool)
-        for gi, gene_info in enumerate(valid_genes):
-            mask_array[gi] = gene_masks[gene_info['gene_id']]
-        scores_h5.create_dataset("position_mask", data=mask_array)
-    
     # Compute N-ISM scores
     print(f"\nComputing N-ISM scores...")
     print(f"Batch size: {options.batch_size}")
@@ -451,21 +365,14 @@ def main():
         # Get reference prediction (with ensemble)
         ref_pred = predict_ensemble(seqnn_model, seq_1hot, options.shifts, options.rc)
         
-        # Determine which positions to process
-        if gene_masks is not None:
-            positions_to_process = np.where(gene_masks[gene_info['gene_id']])[0]
-        else:
-            positions_to_process = np.arange(seq_len)
-        
-        # Process positions in batches
+        # Process all positions in batches
         batch_size = options.batch_size
-        num_positions = len(positions_to_process)
-        num_batches = (num_positions + batch_size - 1) // batch_size
+        num_batches = (seq_len + batch_size - 1) // batch_size
         
         for batch_idx in range(num_batches):
             start_idx = batch_idx * batch_size
-            end_idx = min((batch_idx + 1) * batch_size, num_positions)
-            batch_positions = positions_to_process[start_idx:end_idx]
+            end_idx = min((batch_idx + 1) * batch_size, seq_len)
+            batch_positions = range(start_idx, end_idx)
             
             # Create batch of masked sequences
             masked_seqs = []
