@@ -24,7 +24,7 @@ import numpy as np
 import pysam
 import pandas as pd
 import tensorflow as tf
-
+import time
 from paddy import dna as dna_io
 from paddy import gene as pgene
 from paddy import seqnn
@@ -72,7 +72,7 @@ def parse_args():
     parser.add_option(
         "--batch_size",
         dest="batch_size",
-        default=8,
+        default=32,
         type="int",
         help="Batch size for predictions [Default: %default]",
     )
@@ -333,8 +333,8 @@ def main():
     scores_h5.create_dataset("ism_scores", dtype="float16", shape=(num_valid, seq_len, 4, num_targets))
     # Total attribution per position: mean(abs(scores)) across all nucleotides and tissues
     scores_h5.create_dataset("ism_total", dtype="float16", shape=(num_valid, seq_len))
-    # Reference nucleotide at each position (0=A, 1=C, 2=G, 3=T, 4=N)
-    scores_h5.create_dataset("ref_nucleotides", dtype="uint8", shape=(num_valid, seq_len))
+    # Reference sequence one-hot encoding: (num_genes, seq_len, 4)
+    scores_h5.create_dataset("ref_seq", dtype="uint8", shape=(num_valid, seq_len, 4))
     
     # Gene metadata (all coordinates are 1-based)
     scores_h5.create_dataset("gene_id", data=np.array([g['gene_id'] for g in valid_genes], dtype="S"))
@@ -373,27 +373,18 @@ def main():
         # Get reference prediction (with ensemble)
         ref_pred = predict_ensemble(seqnn_model, seq_1hot, options.shifts, options.rc)
         
-        # Store reference nucleotides
-        for pos in range(seq_len):
-            if seq_1hot[pos, 0] == 1:
-                scores_h5["ref_nucleotides"][gi, pos] = 0  # A
-            elif seq_1hot[pos, 1] == 1:
-                scores_h5["ref_nucleotides"][gi, pos] = 1  # C
-            elif seq_1hot[pos, 2] == 1:
-                scores_h5["ref_nucleotides"][gi, pos] = 2  # G
-            elif seq_1hot[pos, 3] == 1:
-                scores_h5["ref_nucleotides"][gi, pos] = 3  # T
-            else:
-                scores_h5["ref_nucleotides"][gi, pos] = 4  # N
+        # Store reference sequence (one-hot encoding)
+        scores_h5["ref_seq"][gi, :, :] = seq_1hot.astype('uint8')
         
         # Process all positions
         for pos in range(seq_len):
-            # Get reference nucleotide at this position
-            ref_nt_idx = scores_h5["ref_nucleotides"][gi, pos]
-            
-            # Skip if reference is N
-            if ref_nt_idx == 4:
+            start_time = time.time()
+            # Get reference nucleotide at this position (argmax of one-hot)
+            # Skip if reference is N (all zeros in one-hot)
+            if np.sum(seq_1hot[pos, :]) == 0:
                 continue
+            
+            ref_nt_idx = np.argmax(seq_1hot[pos, :])
             
             # Create mutated sequences for all 4 nucleotides
             mutated_seqs = []
@@ -427,7 +418,8 @@ def main():
             # Compute total attribution: mean(abs()) across all 4 nucleotides and tissues
             total_attr = np.mean(np.abs(scores_h5["ism_scores"][gi, pos, :, :]))
             scores_h5["ism_total"][gi, pos] = total_attr
-        
+        print(f"One position done: {time.time() - start_time} seconds")
+
         # Clear memory periodically
         if gi % 50 == 0:
             gc.collect()
