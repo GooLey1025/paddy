@@ -26,4 +26,5 @@ Chromatin2Exp/model_dir/
 *se_eval_exps*
 Seq2Exp/
 Seq2Chromatin/
-.vscode/
+.vscode/__pycache__/
+*.pyc
