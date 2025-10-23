@@ -457,7 +457,7 @@ def main():
     skipped_regions = []
     
     for idx, row in regions_df.iterrows():
-        if idx > 0 and idx % 1000 == 0:
+        if idx > 0 and idx % 5000 == 0:
             print(f"  Processed {idx}/{len(regions_df)} regions...")
         
         region_chr = str(row['chr'])
@@ -605,7 +605,7 @@ def main():
             region_indices = []
             
             for ri, region_info in enumerate(valid_regions):
-                if ri % 1000 == 0 and ri > 0:
+                if ri % 200 == 0 and ri > 0:
                     print(f"  Processing region {ri}/{len(valid_regions)}")
                 
                 seq_1hot, atg_not_found_count = make_seq_1hot_co_interval(
