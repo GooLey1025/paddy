@@ -6,7 +6,8 @@ Compute traditional In Silico Mutagenesis (ISM) attribution scores for all genes
 For each gene, extracts 32kb sequence centered on ATG, computes ISM scores by mutating
 each position to all 3 alternative nucleotides and measuring the prediction difference.
 
-Attribution score: mut_pred - ref_pred (for each of 4 nucleotides × 23 tissues)
+Attribution score: ref_pred - mut_pred (for each of 4 nucleotides × 23 tissues)
+This reflects the importance of each position (how much prediction drops when mutated).
 Reference nucleotide attribution is always 0.
 Total attribution: mean(abs(attribution)) across all 4 nucleotides and 23 tissues
 
@@ -404,14 +405,15 @@ def main():
             # Process in batch for efficiency
             mut_preds = predict_ensemble_batch(seqnn_model, mutated_seqs, options.shifts, options.rc)
             
-            # Compute attribution scores: mut_pred - ref_pred
+            # Compute attribution scores: ref_pred - mut_pred
+            # This reflects the importance of the position (how much prediction drops when mutated)
             for i, nt_idx in enumerate(nt_indices):
                 if nt_idx == ref_nt_idx:
                     # Reference nucleotide: attribution is 0
                     attribution = np.zeros(num_targets)
                 else:
-                    # Alternative nucleotide: mut_pred - ref_pred
-                    attribution = mut_preds[i] - ref_pred
+                    # Alternative nucleotide: ref_pred - mut_pred
+                    attribution = ref_pred - mut_preds[i]
                 
                 scores_h5["ism_scores"][gi, pos, nt_idx, :] = attribution.astype('float16')
             
