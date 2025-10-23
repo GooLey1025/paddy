@@ -71,7 +71,7 @@ def parse_args():
     parser.add_option(
         "--batch_size",
         dest="batch_size",
-        default=8,
+        default=32,
         type="int",
         help="Batch size for predictions [Default: %default]",
     )
