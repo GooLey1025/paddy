@@ -23,6 +23,7 @@ import numpy as np
 import pysam
 import pandas as pd
 import tensorflow as tf
+import time
 
 from paddy import dna as dna_io
 from paddy import gene as pgene
@@ -392,7 +393,7 @@ def main():
                 scores_h5["nism_scores"][gi, pos, :] = attribution.astype('float16')
                 # Total attribution: mean of absolute values across tissues
                 scores_h5["nism_total"][gi, pos] = np.mean(np.abs(attribution)).astype('float16')
-        
+
         # Clear memory periodically
         if gi % 50 == 0:
             gc.collect()

@@ -73,9 +73,9 @@ def parse_args():
     parser.add_option(
         "--batch_size",
         dest="batch_size",
-        default=32,
+        default=8,
         type="int",
-        help="Batch size for predictions [Default: %default]",
+        help="Number of positions to process in one batch [Default: %default]",
     )
     
     return parser.parse_args()
@@ -351,11 +351,7 @@ def main():
     
     # Compute ISM scores
     print(f"\nComputing ISM scores...")
-    print(f"Batch size: {options.batch_size}")
-    
-    # Nucleotide mapping
-    nt_to_idx = {'A': 0, 'C': 1, 'G': 2, 'T': 3, 'N': 4}
-    idx_to_nt = ['A', 'C', 'G', 'T']
+    print(f"Batch size: {options.batch_size} positions per batch")
     
     for gi, gene_info in enumerate(valid_genes):
         if gi % 100 == 0 and gi > 0:
@@ -377,51 +373,61 @@ def main():
         # Store reference sequence (one-hot encoding)
         scores_h5["ref_seq"][gi, :, :] = seq_1hot.astype('uint8')
         
-        # Process all positions
+        # Find valid positions (non-N positions)
+        valid_positions = []
         for pos in range(seq_len):
-            start_time = time.time()
-            # Get reference nucleotide at this position (argmax of one-hot)
-            # Skip if reference is N (all zeros in one-hot)
-            if np.sum(seq_1hot[pos, :]) == 0:
-                continue
+            if np.sum(seq_1hot[pos, :]) > 0:  # Not N
+                valid_positions.append(pos)
+        
+        # Process positions in batches
+        for batch_start in range(0, len(valid_positions), options.batch_size):
+            batch_end = min(batch_start + options.batch_size, len(valid_positions))
+            batch_positions = valid_positions[batch_start:batch_end]
             
-            ref_nt_idx = np.argmax(seq_1hot[pos, :])
-            
-            # Create mutated sequences for all 4 nucleotides
+            # Create mutated sequences for all positions and nucleotides in this batch
+            # Only mutate to 3 alternative nucleotides (skip reference nucleotide)
+            # Shape: (batch_size * 3, seq_len, 4)
             mutated_seqs = []
-            nt_indices = []
+            position_nt_map = []  # List of (pos, nt_idx) tuples
             
-            for nt_idx in range(4):
-                mut_seq = seq_1hot.copy()
-                # Set position to the nucleotide
-                mut_seq[pos, :] = 0
-                mut_seq[pos, nt_idx] = 1
-                mutated_seqs.append(mut_seq)
-                nt_indices.append(nt_idx)
+            for pos in batch_positions:
+                ref_nt_idx = np.argmax(seq_1hot[pos, :])
+                
+                for nt_idx in range(4):
+                    if nt_idx == ref_nt_idx:
+                        continue  # Skip reference nucleotide
+                    
+                    mut_seq = seq_1hot.copy()
+                    mut_seq[pos, :] = 0
+                    mut_seq[pos, nt_idx] = 1
+                    mutated_seqs.append(mut_seq)
+                    position_nt_map.append((pos, nt_idx))
+            
+            # Only predict if there are mutations to process
+            if len(mutated_seqs) == 0:
+                continue
             
             mutated_seqs = np.array(mutated_seqs)
             
-            # Get predictions for all mutations (with ensemble)
-            # Process in batch for efficiency
+            # Get predictions for all mutations in this batch (with ensemble)
             mut_preds = predict_ensemble_batch(seqnn_model, mutated_seqs, options.shifts, options.rc)
             
-            # Compute attribution scores: ref_pred - mut_pred
-            # This reflects the importance of the position (how much prediction drops when mutated)
-            for i, nt_idx in enumerate(nt_indices):
-                if nt_idx == ref_nt_idx:
-                    # Reference nucleotide: attribution is 0
-                    attribution = np.zeros(num_targets)
-                else:
-                    # Alternative nucleotide: ref_pred - mut_pred
-                    attribution = ref_pred - mut_preds[i]
-                
+            # Compute attribution scores and store results
+            for i, (pos, nt_idx) in enumerate(position_nt_map):
+                # Alternative nucleotide: ref_pred - mut_pred
+                attribution = ref_pred - mut_preds[i]
                 scores_h5["ism_scores"][gi, pos, nt_idx, :] = attribution.astype('float16')
             
-            # Compute total attribution: mean(abs()) across all 4 nucleotides and tissues
+            # Set reference nucleotide attribution to 0
+            for pos in batch_positions:
+                ref_nt_idx = np.argmax(seq_1hot[pos, :])
+                scores_h5["ism_scores"][gi, pos, ref_nt_idx, :] = 0
+        
+        # Compute total attribution for all positions
+        for pos in valid_positions:
             total_attr = np.mean(np.abs(scores_h5["ism_scores"][gi, pos, :, :]))
             scores_h5["ism_total"][gi, pos] = total_attr
-        print(f"One position done: {time.time() - start_time} seconds")
-
+        
         # Clear memory periodically
         if gi % 50 == 0:
             gc.collect()
