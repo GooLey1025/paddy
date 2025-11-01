@@ -12,6 +12,7 @@ Note: All coordinates stored in the output HDF5 file are 1-based.
 from __future__ import print_function
 from optparse import OptionParser
 import gc
+import json
 import yaml
 import os
 import sys
@@ -67,7 +68,7 @@ def parse_args():
     parser.add_option(
         "--batch_size",
         dest="batch_size",
-        default=8,
+        default=64,
         type="int",
         help="Batch size for gradient computation [Default: %default]",
     )
@@ -119,6 +120,13 @@ def parse_args():
         default=1,
         type="int",
         help="Number of tissues to process at once [Default: %default]",
+    )
+    parser.add_option(
+        "--restart",
+        dest="restart",
+        default=False,
+        action="store_true",
+        help="Force restart from beginning, ignoring any existing checkpoint [Default: %default]",
     )
     
     return parser.parse_args()
@@ -177,6 +185,29 @@ def unaugment_grads(grads, fwdrc=True, shift=0):
         grads = grads[:, :, 0]
     
     return grads
+
+
+def save_checkpoint(checkpoint_path, gene_idx, shift_idx, rc_idx):
+    """Save checkpoint state to file."""
+    checkpoint_data = {
+        'gene_idx': gene_idx,
+        'shift_idx': shift_idx,
+        'rc_idx': rc_idx
+    }
+    with open(checkpoint_path, 'w') as f:
+        json.dump(checkpoint_data, f)
+
+
+def load_checkpoint(checkpoint_path):
+    """Load checkpoint state from file. Returns (gene_idx, shift_idx, rc_idx) or None."""
+    if not os.path.isfile(checkpoint_path):
+        return None
+    try:
+        with open(checkpoint_path, 'r') as f:
+            checkpoint_data = json.load(f)
+        return (checkpoint_data['gene_idx'], checkpoint_data['shift_idx'], checkpoint_data['rc_idx'])
+    except (json.JSONDecodeError, KeyError, IOError):
+        return None
 
 
 def main():
@@ -355,31 +386,64 @@ def main():
         tissue_indices = list(range(num_targets))
         print(f"\nComputing gradients for all {num_targets} tissues")
     
+    # Initialize checkpoint path
+    checkpoint_path = options.out_file + ".checkpoint"
+    
+    # Check for existing checkpoint
+    checkpoint_state = None
+    if not options.restart:
+        checkpoint_state = load_checkpoint(checkpoint_path)
+    
     # Initialize output HDF5
-    print(f"\nInitializing output file: {options.out_file}")
-    if os.path.isfile(options.out_file):
-        os.remove(options.out_file)
-    
-    scores_h5 = h5py.File(options.out_file, "w")
-    
-    # Create datasets - store full 32kb gradients
-    num_valid = len(valid_genes)
-    
-    # Store full sequence gradients for each gene
-    scores_h5.create_dataset("igs", dtype="float16", shape=(num_valid, seq_len, 4, num_output_targets))
-    
-    # Gene metadata (all coordinates are 1-based)
-    scores_h5.create_dataset("gene_id", data=np.array([g['gene_id'] for g in valid_genes], dtype="S"))
-    scores_h5.create_dataset("gene_chr", data=np.array([g['gene_chr'] for g in valid_genes], dtype="S"))
-    scores_h5.create_dataset("gene_strand", data=np.array([g['gene_strand'] for g in valid_genes], dtype="S"))
-    scores_h5.create_dataset("gene_start", data=np.array([g['gene_start'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
-    scores_h5.create_dataset("gene_end", data=np.array([g['gene_end'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
-    scores_h5.create_dataset("atg_pos", data=np.array([g['atg_pos'] for g in valid_genes], dtype="int32"))  # 1-based
-    scores_h5.create_dataset("seq_start", data=np.array([g['seq_start'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
-    scores_h5.create_dataset("seq_end", data=np.array([g['seq_end'] for g in valid_genes], dtype="int32"))  # 1-based exclusive
-    scores_h5.create_dataset("cds_start", data=np.array([g['cds_start'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
-    scores_h5.create_dataset("cds_end", data=np.array([g['cds_end'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
-    scores_h5.create_dataset("tissue_indices", data=np.array(tissue_indices, dtype="int32"))
+    if options.restart or checkpoint_state is None:
+        # Start fresh
+        print(f"\nInitializing output file: {options.out_file}")
+        if os.path.isfile(options.out_file):
+            os.remove(options.out_file)
+        if os.path.isfile(checkpoint_path):
+            os.remove(checkpoint_path)
+        
+        scores_h5 = h5py.File(options.out_file, "w")
+        
+        # Create datasets - store full 32kb gradients
+        num_valid = len(valid_genes)
+        
+        # Store full sequence gradients for each gene
+        scores_h5.create_dataset("igs", dtype="float16", shape=(num_valid, seq_len, 4, num_output_targets))
+        
+        # Gene metadata (all coordinates are 1-based)
+        scores_h5.create_dataset("gene_id", data=np.array([g['gene_id'] for g in valid_genes], dtype="S"))
+        scores_h5.create_dataset("gene_chr", data=np.array([g['gene_chr'] for g in valid_genes], dtype="S"))
+        scores_h5.create_dataset("gene_strand", data=np.array([g['gene_strand'] for g in valid_genes], dtype="S"))
+        scores_h5.create_dataset("gene_start", data=np.array([g['gene_start'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
+        scores_h5.create_dataset("gene_end", data=np.array([g['gene_end'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
+        scores_h5.create_dataset("atg_pos", data=np.array([g['atg_pos'] for g in valid_genes], dtype="int32"))  # 1-based
+        scores_h5.create_dataset("seq_start", data=np.array([g['seq_start'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
+        scores_h5.create_dataset("seq_end", data=np.array([g['seq_end'] for g in valid_genes], dtype="int32"))  # 1-based exclusive
+        scores_h5.create_dataset("cds_start", data=np.array([g['cds_start'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
+        scores_h5.create_dataset("cds_end", data=np.array([g['cds_end'] for g in valid_genes], dtype="int32"))  # 1-based inclusive
+        scores_h5.create_dataset("tissue_indices", data=np.array(tissue_indices, dtype="int32"))
+        
+        start_gene_idx = 0
+        start_shift_idx = 0
+        start_rc_idx = 0
+    else:
+        # Resume from checkpoint
+        start_gene_idx, start_shift_idx, start_rc_idx = checkpoint_state
+        print(f"\nResuming from checkpoint: {options.out_file}")
+        print(f"Last completed: gene_idx={start_gene_idx}, shift_idx={start_shift_idx}, rc_idx={start_rc_idx}")
+        
+        # Open existing HDF5 file in read-write mode
+        scores_h5 = h5py.File(options.out_file, "r+")
+        
+        # Move to next position
+        start_rc_idx += 1
+        if start_rc_idx > (1 if options.rc else 0):
+            start_rc_idx = 0
+            start_shift_idx += 1
+            if start_shift_idx >= len(options.shifts):
+                start_shift_idx = 0
+                start_gene_idx += 1
     
     # Create baseline
     if options.baseline_type == "zero":
@@ -406,10 +470,19 @@ def main():
     buffer_size = 100
     atg_not_found_count = 0
     
-    for shift in options.shifts:
+    for shift_idx, shift in enumerate(options.shifts):
+        # Skip completed shifts
+        if shift_idx < start_shift_idx:
+            continue
+        
         print(f"\nProcessing shift {shift}")
         
-        for rev_comp in [False, True] if options.rc else [False]:
+        rc_options = [False, True] if options.rc else [False]
+        for rc_idx, rev_comp in enumerate(rc_options):
+            # Skip completed rc options
+            if shift_idx == start_shift_idx and rc_idx < start_rc_idx:
+                continue
+            
             if options.rc:
                 print(f"Fwd/rev = {'rev' if rev_comp else 'fwd'}")
             
@@ -417,6 +490,10 @@ def main():
             gene_indices = []
             
             for gi, gene_info in enumerate(valid_genes):
+                # Skip completed genes
+                if shift_idx == start_shift_idx and rc_idx == start_rc_idx and gi < start_gene_idx:
+                    continue
+                
                 if gi % 200 == 0 and gi > 0:
                     print(f"  Processing gene {gi}/{len(valid_genes)}")
                 
@@ -473,6 +550,9 @@ def main():
                         
                         # Store complete gradients (no region extraction)
                         scores_h5["igs"][gi, :, :, :] += ig_full
+                        
+                        # Save checkpoint after each gene
+                        save_checkpoint(checkpoint_path, gi, shift_idx, rc_idx)
                     
                     seq_1hots = []
                     gene_indices = []
@@ -488,6 +568,11 @@ def main():
     
     scores_h5.close()
     genome_open.close()
+    
+    # Remove checkpoint file on successful completion
+    if os.path.isfile(checkpoint_path):
+        os.remove(checkpoint_path)
+        print(f"Checkpoint file removed: {checkpoint_path}")
     
     print("\n" + "="*70)
     print("Done!")
