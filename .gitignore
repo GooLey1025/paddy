@@ -28,3 +28,4 @@ Seq2Exp/
 Seq2Chromatin/
 .vscode/__pycache__/
 *.pyc
+**/*.egg-info/
