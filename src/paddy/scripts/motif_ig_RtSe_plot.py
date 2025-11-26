@@ -559,6 +559,9 @@ def plot_motif_comprehensive_view(gene_idx, gene_id, grads_saliency, gene_sequen
     if output_format.lower() == 'svg':
         plt.savefig(f"{save_dir}/{gene_id}_comprehensive_analysis.svg", 
                    dpi=300, bbox_inches='tight', format='svg')
+    elif output_format.lower() == 'png':
+        plt.savefig(f"{save_dir}/{gene_id}_comprehensive_analysis.png", 
+                   dpi=300, bbox_inches='tight', format='png')
     else:
         plt.savefig(f"{save_dir}/{gene_id}_comprehensive_analysis.pdf", 
                    dpi=300, bbox_inches='tight')
@@ -704,8 +707,8 @@ if __name__ == "__main__":
                        help='Output directory for visualizations')
     parser.add_argument('--logo_width', type=int, default=192,
                        help='Width of local motif view in bp')
-    parser.add_argument('--output_format', type=str, default='pdf', choices=['pdf', 'svg'],
-                       help='Output format: pdf or svg (default: pdf)')
+    parser.add_argument('--output_format', type=str, default='pdf', choices=['pdf', 'svg', 'png'],
+                       help='Output format: pdf, svg, or png (default: pdf)')
     parser.add_argument('--h5_file', type=str, default='all_genes.h5',
                        help='Path to HDF5 file with gradient data (default: all_genes.h5)')
     parser.add_argument('--motif_json', type=str, default='motif_info.json',

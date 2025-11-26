@@ -17,6 +17,7 @@ Note: All coordinates stored in the output HDF5 file are 1-based.
 from __future__ import print_function
 from optparse import OptionParser
 import gc
+import json
 import yaml
 import os
 import sys
@@ -77,6 +78,13 @@ def parse_args():
         type="int",
         help="Number of positions to process in one batch [Default: %default]",
     )
+    parser.add_option(
+        "--restart",
+        dest="restart",
+        default=False,
+        action="store_true",
+        help="Force restart from beginning, ignoring any existing checkpoint [Default: %default]",
+    )
     
     return parser.parse_args()
 
@@ -96,6 +104,27 @@ def make_seq_1hot_co_interval(genome_open, chrm, start, end, seq_len, strand):
         seq_dna = dna_io.dna_rc(seq_dna)
     seq_1hot = dna_io.dna_1hot(seq_dna)
     return seq_1hot
+
+
+def save_checkpoint(checkpoint_path, gene_idx):
+    """Save checkpoint state to file."""
+    checkpoint_data = {
+        'gene_idx': gene_idx
+    }
+    with open(checkpoint_path, 'w') as f:
+        json.dump(checkpoint_data, f)
+
+
+def load_checkpoint(checkpoint_path):
+    """Load checkpoint state from file. Returns gene_idx or None."""
+    if not os.path.isfile(checkpoint_path):
+        return None
+    try:
+        with open(checkpoint_path, 'r') as f:
+            checkpoint_data = json.load(f)
+        return checkpoint_data['gene_idx']
+    except (json.JSONDecodeError, KeyError, IOError):
+        return None
 
 
 def predict_ensemble(seqnn_model, seq_1hot, shifts, rc):
@@ -319,41 +348,70 @@ def main():
         skipped_df.to_csv(skipped_path, index=False)
         print(f"Saved skipped genes to: {skipped_path}")
     
+    # Initialize checkpoint path
+    checkpoint_path = options.out_file + ".checkpoint"
+    
+    # Check for existing checkpoint
+    checkpoint_state = None
+    if not options.restart:
+        checkpoint_state = load_checkpoint(checkpoint_path)
+    
     # Initialize output HDF5
-    print(f"\nInitializing output file: {options.out_file}")
-    if os.path.isfile(options.out_file):
-        os.remove(options.out_file)
-    
-    scores_h5 = h5py.File(options.out_file, "w")
-    
-    # Create datasets
-    num_valid = len(valid_genes)
-    
-    # ISM attribution scores: (num_genes, seq_len, 4, num_targets)
-    # 4 nucleotides: A=0, C=1, G=2, T=3
-    scores_h5.create_dataset("ism_scores", dtype="float16", shape=(num_valid, seq_len, 4, num_targets))
-    # Total attribution per position: mean(abs(scores)) across all nucleotides and tissues
-    scores_h5.create_dataset("ism_total", dtype="float16", shape=(num_valid, seq_len))
-    # Reference sequence one-hot encoding: (num_genes, seq_len, 4)
-    scores_h5.create_dataset("ref_seq", dtype="uint8", shape=(num_valid, seq_len, 4))
-    
-    # Gene metadata (all coordinates are 1-based)
-    scores_h5.create_dataset("gene_id", data=np.array([g['gene_id'] for g in valid_genes], dtype="S"))
-    scores_h5.create_dataset("gene_chr", data=np.array([g['gene_chr'] for g in valid_genes], dtype="S"))
-    scores_h5.create_dataset("gene_strand", data=np.array([g['gene_strand'] for g in valid_genes], dtype="S"))
-    scores_h5.create_dataset("gene_start", data=np.array([g['gene_start'] for g in valid_genes], dtype="int32"))
-    scores_h5.create_dataset("gene_end", data=np.array([g['gene_end'] for g in valid_genes], dtype="int32"))
-    scores_h5.create_dataset("atg_pos", data=np.array([g['atg_pos'] for g in valid_genes], dtype="int32"))
-    scores_h5.create_dataset("seq_start", data=np.array([g['seq_start'] for g in valid_genes], dtype="int32"))
-    scores_h5.create_dataset("seq_end", data=np.array([g['seq_end'] for g in valid_genes], dtype="int32"))
-    scores_h5.create_dataset("cds_start", data=np.array([g['cds_start'] for g in valid_genes], dtype="int32"))
-    scores_h5.create_dataset("cds_end", data=np.array([g['cds_end'] for g in valid_genes], dtype="int32"))
+    if options.restart or checkpoint_state is None:
+        # Start fresh
+        print(f"\nInitializing output file: {options.out_file}")
+        if os.path.isfile(options.out_file):
+            os.remove(options.out_file)
+        if os.path.isfile(checkpoint_path):
+            os.remove(checkpoint_path)
+        
+        scores_h5 = h5py.File(options.out_file, "w")
+        
+        # Create datasets
+        num_valid = len(valid_genes)
+        
+        # ISM attribution scores: (num_genes, seq_len, 4, num_targets)
+        # 4 nucleotides: A=0, C=1, G=2, T=3
+        scores_h5.create_dataset("ism_scores", dtype="float16", shape=(num_valid, seq_len, 4, num_targets))
+        # Total attribution per position: mean(abs(scores)) across all nucleotides and tissues
+        scores_h5.create_dataset("ism_total", dtype="float16", shape=(num_valid, seq_len))
+        # Reference sequence one-hot encoding: (num_genes, seq_len, 4)
+        scores_h5.create_dataset("ref_seq", dtype="uint8", shape=(num_valid, seq_len, 4))
+        
+        # Gene metadata (all coordinates are 1-based)
+        scores_h5.create_dataset("gene_id", data=np.array([g['gene_id'] for g in valid_genes], dtype="S"))
+        scores_h5.create_dataset("gene_chr", data=np.array([g['gene_chr'] for g in valid_genes], dtype="S"))
+        scores_h5.create_dataset("gene_strand", data=np.array([g['gene_strand'] for g in valid_genes], dtype="S"))
+        scores_h5.create_dataset("gene_start", data=np.array([g['gene_start'] for g in valid_genes], dtype="int32"))
+        scores_h5.create_dataset("gene_end", data=np.array([g['gene_end'] for g in valid_genes], dtype="int32"))
+        scores_h5.create_dataset("atg_pos", data=np.array([g['atg_pos'] for g in valid_genes], dtype="int32"))
+        scores_h5.create_dataset("seq_start", data=np.array([g['seq_start'] for g in valid_genes], dtype="int32"))
+        scores_h5.create_dataset("seq_end", data=np.array([g['seq_end'] for g in valid_genes], dtype="int32"))
+        scores_h5.create_dataset("cds_start", data=np.array([g['cds_start'] for g in valid_genes], dtype="int32"))
+        scores_h5.create_dataset("cds_end", data=np.array([g['cds_end'] for g in valid_genes], dtype="int32"))
+        
+        start_gene_idx = 0
+    else:
+        # Resume from checkpoint
+        start_gene_idx = checkpoint_state
+        print(f"\nResuming from checkpoint: {options.out_file}")
+        print(f"Last completed: gene_idx={start_gene_idx}")
+        
+        # Open existing HDF5 file in read-write mode
+        scores_h5 = h5py.File(options.out_file, "r+")
+        
+        # Move to next position
+        start_gene_idx += 1
     
     # Compute ISM scores
     print(f"\nComputing ISM scores...")
     print(f"Batch size: {options.batch_size} positions per batch")
     
     for gi, gene_info in enumerate(valid_genes):
+        # Skip completed genes
+        if gi < start_gene_idx:
+            continue
+        
         if gi % 100 == 0 and gi > 0:
             print(f"  Processing gene {gi}/{len(valid_genes)}")
         
@@ -427,6 +485,9 @@ def main():
         for pos in valid_positions:
             total_attr = np.mean(np.abs(scores_h5["ism_scores"][gi, pos, :, :]))
             scores_h5["ism_total"][gi, pos] = total_attr
+        
+        # Save checkpoint after each gene
+        save_checkpoint(checkpoint_path, gi)
         
         # Clear memory periodically
         if gi % 50 == 0:

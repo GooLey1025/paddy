@@ -13,6 +13,8 @@ scikit-learn
 openpyxl
 umap-learn
 seaborn
+intervaltree
+pybedtools
 
 [dev]
 pytest

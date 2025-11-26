@@ -22,6 +22,8 @@ Requires-Dist: scikit-learn
 Requires-Dist: openpyxl
 Requires-Dist: umap-learn
 Requires-Dist: seaborn
+Requires-Dist: intervaltree
+Requires-Dist: pybedtools
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: black; extra == "dev"

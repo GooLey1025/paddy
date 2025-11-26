@@ -29,7 +29,7 @@ paddy_ig_fa.py --model_path $model_path \
     $yaml \
     -o ${prefix}_${seed}_igs.h5 \
     WetExp_genes.fa
-./motif_ig_RtSe_plot.py --output_format pdf --h5_file ${prefix}_${seed}_igs.h5 \
+motif_ig_RtSe_plot.py --output_format png --h5_file ${prefix}_${seed}_igs.h5 \
     --output_dir ${prefix}_${seed}_igs_RtSe_plots --motif_json motif_info.json \
     --fasta_file WetExp_genes.fa --tissue_dict 23tissues_modified_dict.json
 

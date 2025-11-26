@@ -100,6 +100,10 @@ class SlopeNN:
         # Store output shape for head building
         self.trunk_output_shape = trunk_output.shape[1:]
         
+        # Print trunk model summary if verbose
+        if self.verbose:
+            print("=== Trunk Model Summary ===")
+            self.model_trunk.summary()
         
         return self.model_trunk
     
@@ -196,7 +200,8 @@ class SlopeNN:
                 name='combine_divide'
             )([ref_embedding, alt_embedding])
         elif self.finetune_method == 'subtract':
-            return tf.keras.layers.Subtract(name='combine_subtract')([alt_embedding, ref_embedding])
+            # ref - alt: positive values indicate mutation increases expression
+            return tf.keras.layers.Subtract(name='combine_subtract')([ref_embedding, alt_embedding])
         else:
             raise ValueError(f"Unknown finetune_method: {self.finetune_method}")
     
@@ -250,11 +255,206 @@ class SlopeNN:
             if not hasattr(self, 'model_trunk'):
                 raise ValueError("Trunk model not built yet")
             print(f"Loading trunk weights from: {weights_path}")
-            self.model_trunk.load_weights(weights_path, by_name=True)
+            # Use h5py to load weights layer by layer, handling name mismatches and nested structures
+            # This is necessary because when trunk is used multiple times (ref/alt),
+            # TensorFlow adds suffixes (_1, _2) to layer names
+            import h5py
+            import numpy as np
+            
+            with h5py.File(weights_path, 'r') as f:
+                # Handle Keras HDF5 file structure
+                if 'model_weights' in f.keys():
+                    weight_group = f['model_weights']
+                else:
+                    weight_group = f
+                
+                # Get all layer names that have weights (skip empty groups)
+                def get_layers_with_weights(group, prefix=""):
+                    """Recursively find all layers that have weight datasets."""
+                    layers = {}
+                    for key in group.keys():
+                        full_name = f"{prefix}/{key}" if prefix else key
+                        item = group[key]
+                        
+                        if isinstance(item, h5py.Group):
+                            # Check if this group contains weight datasets directly or in subdirectories
+                            weight_datasets = []
+                            for subkey in item.keys():
+                                if isinstance(item[subkey], h5py.Dataset):
+                                    weight_datasets.append(subkey)
+                                elif isinstance(item[subkey], h5py.Group):
+                                    # Check nested group (e.g., batch_normalization/batch_normalization/)
+                                    for nested_key in item[subkey].keys():
+                                        if isinstance(item[subkey][nested_key], h5py.Dataset):
+                                            weight_datasets.append(f"{subkey}/{nested_key}")
+                            
+                            if weight_datasets:
+                                # This is a layer group with weights
+                                layers[key] = item
+                            else:
+                                # Recursively search subgroups
+                                nested = get_layers_with_weights(item, key)
+                                layers.update(nested)
+                    
+                    return layers
+                
+                saved_layers = get_layers_with_weights(weight_group)
+                
+                model_layers = {layer.name: layer for layer in self.model_trunk.layers}
+                
+                # Create mapping from base layer names (without suffix) to model layers
+                base_name_to_layers = {}
+                for layer_name, layer in model_layers.items():
+                    # Extract base name (remove _1, _2, etc. suffix)
+                    parts = layer_name.rsplit('_', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        base_name = parts[0]
+                    else:
+                        base_name = layer_name
+                    if base_name not in base_name_to_layers:
+                        base_name_to_layers[base_name] = []
+                    base_name_to_layers[base_name].append((layer_name, layer))
+                
+                loaded_count = 0
+                skipped_count = 0
+                
+                def get_weight_arrays(layer_group):
+                    """Extract weight arrays from a layer group, handling nested structures."""
+                    weights = []
+                    weight_names = []
+                    
+                    # Try to get weight_names attribute first
+                    if 'weight_names' in layer_group.attrs:
+                        weight_names_attr = layer_group.attrs['weight_names']
+                        for wname in weight_names_attr:
+                            # weight_names are like "batch_normalization/gamma:0"
+                            # Need to find the actual dataset
+                            parts = wname.decode() if isinstance(wname, bytes) else str(wname)
+                            if '/' in parts:
+                                layer_part, weight_part = parts.split('/', 1)
+                                if layer_part in layer_group:
+                                    if weight_part in layer_group[layer_part]:
+                                        weights.append(np.array(layer_group[layer_part][weight_part]))
+                                        weight_names.append(weight_part)
+                                    elif isinstance(layer_group[layer_part], h5py.Group):
+                                        # Check nested structure (e.g., batch_normalization/batch_normalization/)
+                                        for subkey in layer_group[layer_part].keys():
+                                            if isinstance(layer_group[layer_part][subkey], h5py.Group):
+                                                if weight_part in layer_group[layer_part][subkey]:
+                                                    weights.append(np.array(layer_group[layer_part][subkey][weight_part]))
+                                                    weight_names.append(weight_part)
+                            else:
+                                if parts in layer_group:
+                                    weights.append(np.array(layer_group[parts]))
+                                    weight_names.append(parts)
+                    else:
+                        # Fallback: find all datasets recursively
+                        def find_datasets(group, path=""):
+                            datasets = []
+                            for key in group.keys():
+                                if isinstance(group[key], h5py.Dataset):
+                                    datasets.append((key, np.array(group[key])))
+                                elif isinstance(group[key], h5py.Group):
+                                    datasets.extend(find_datasets(group[key], f"{path}/{key}"))
+                            return datasets
+                        
+                        datasets = find_datasets(layer_group)
+                        weights = [w for _, w in sorted(datasets)]
+                        weight_names = [n for n, _ in sorted(datasets)]
+                    
+                    return weights, weight_names
+                
+                for saved_layer_name, layer_group in saved_layers.items():
+                    # Skip non-layer groups
+                    if saved_layer_name in ['model_weights', 'top_level_model_weights']:
+                        continue
+                    
+                    # Try exact match first
+                    if saved_layer_name in model_layers:
+                        layer = model_layers[saved_layer_name]
+                        try:
+                            weights, weight_names = get_weight_arrays(layer_group)
+                            if weights:
+                                layer.set_weights(weights)
+                                print(f"[LOAD] {saved_layer_name}")
+                                loaded_count += 1
+                            else:
+                                print(f"[SKIP] {saved_layer_name}: no weights found")
+                                skipped_count += 1
+                        except Exception as e:
+                            print(f"[SKIP] {saved_layer_name}: {e}")
+                            skipped_count += 1
+                    else:
+                        # Try to match base name (handle _1, _2 suffixes)
+                        parts = saved_layer_name.rsplit('_', 1)
+                        if len(parts) == 2 and parts[1].isdigit():
+                            base_name = parts[0]
+                            saved_suffix = parts[1]
+                        else:
+                            base_name = saved_layer_name
+                            saved_suffix = None
+                        
+                        if base_name in base_name_to_layers:
+                            # Load into all matching layers (e.g., both conv_1 and conv_2)
+                            matched = False
+                            weights, weight_names = get_weight_arrays(layer_group)
+                            if not weights:
+                                print(f"[SKIP] {saved_layer_name}: no weights found")
+                                skipped_count += 1
+                                continue
+                            
+                            # Get expected weight shapes from the first matching layer to check compatibility
+                            for layer_name, layer in base_name_to_layers[base_name]:
+                                try:
+                                    # Check if weight shapes match before loading
+                                    expected_shapes = [w.shape for w in layer.get_weights()]
+                                    if len(weights) != len(expected_shapes):
+                                        continue
+                                    
+                                    # Check if shapes are compatible
+                                    compatible = True
+                                    for w, expected_shape in zip(weights, expected_shapes):
+                                        if w.shape != expected_shape:
+                                            compatible = False
+                                            break
+                                    
+                                    if compatible:
+                                        layer.set_weights(weights)
+                                        print(f"[LOAD] {saved_layer_name} -> {layer_name}")
+                                        loaded_count += 1
+                                        matched = True
+                                        break  # Only load into the first compatible layer
+                                except Exception as e:
+                                    # Shape mismatch or other error
+                                    pass
+                            
+                            if not matched:
+                                # If no exact match found, try loading into layers with matching suffix
+                                if saved_suffix:
+                                    for layer_name, layer in base_name_to_layers[base_name]:
+                                        layer_parts = layer_name.rsplit('_', 1)
+                                        if len(layer_parts) == 2 and layer_parts[1] == saved_suffix:
+                                            try:
+                                                layer.set_weights(weights)
+                                                print(f"[LOAD] {saved_layer_name} -> {layer_name} (suffix match)")
+                                                loaded_count += 1
+                                                matched = True
+                                                break
+                                            except Exception as e:
+                                                print(f"[SKIP] {saved_layer_name} -> {layer_name}: {e}")
+                                
+                                if not matched:
+                                    print(f"[SKIP] Weight has layer '{saved_layer_name}' (no compatible layer found in model)")
+                                    skipped_count += 1
+                        else:
+                            print(f"[SKIP] Weight has layer '{saved_layer_name}' (model doesn't have matching layer)")
+                            skipped_count += 1
+                
+                print(f"Loaded {loaded_count} layers, skipped {skipped_count} layers")
         else:
             print(f"Loading full model weights from: {weights_path}")
             print(f"Not checked yet, may cause error", sys.stderr)
-            self.model.load_weights(weights_path, by_name=True)
+            self.model.load_weights(weights_path, by_name=False)
 
     def append_activation(self):
         """Add additional activation to convert float16 output to float32, required for mixed precision."""

@@ -214,6 +214,15 @@ def main():
 
         seqnn_trainer = trainer.Trainer(params_train, train_data, eval_data, args.out_dir, args.log_dir)
         seqnn_trainer.compile(seqnn_model)
+        
+        # Start training for single GPU
+        if args.keras_fit:
+            seqnn_trainer.fit_keras(seqnn_model)
+        else:
+            if len(args.data_dirs) == 1:
+                seqnn_trainer.fit_tape(seqnn_model, resume=args.resume)
+            else:
+                seqnn_trainer.fit2(seqnn_model)
     else:
         # Multi-GPU training
         strategy = tf.distribute.MirroredStrategy()

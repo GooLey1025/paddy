@@ -68,7 +68,7 @@ def parse_args():
     parser.add_option(
         "--batch_size",
         dest="batch_size",
-        default=64,
+        default=8,
         type="int",
         help="Batch size for gradient computation [Default: %default]",
     )
@@ -568,11 +568,6 @@ def main():
     
     scores_h5.close()
     genome_open.close()
-    
-    # Remove checkpoint file on successful completion
-    if os.path.isfile(checkpoint_path):
-        os.remove(checkpoint_path)
-        print(f"Checkpoint file removed: {checkpoint_path}")
     
     print("\n" + "="*70)
     print("Done!")

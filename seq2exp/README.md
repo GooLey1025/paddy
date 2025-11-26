@@ -3,6 +3,7 @@
 
 ```sh
 # split datasets
+#conda activate borzoi
 hound_data.py -l 32768  --local -p 16 -o full_mseqs -w 32 NumChr.Rice_MSUv7.fa Nip8_106targets.txt --st
 ```
 Here assign chr1 as valid set, chr2 as test set, while others are train sets.
