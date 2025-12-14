@@ -29,3 +29,5 @@ Seq2Chromatin/
 .vscode/__pycache__/
 *.pyc
 **/*.egg-info/
+src/paddy/__pycache__
+src/harrow/__pycache__
